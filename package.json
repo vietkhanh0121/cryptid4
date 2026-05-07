@@ -1,0 +1,1 @@
+{"scripts":{"start":"node server.mjs","vite":"vite --host 0.0.0.0"},"dependencies":{"@vitejs/plugin-react":"latest","express":"^5.2.1","lucide-react":"latest","peer":"^1.0.2","peerjs":"^1.5.5","react":"latest","react-dom":"latest","vite":"latest"}}

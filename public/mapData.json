@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "pieceCols": 6,
+  "pieceRows": 3,
+  "boardPieceCols": 2,
+  "boardPieceRows": 3,
+  "pieces": [
+    {
+      "pieceId": 1,
+      "terrainRows": [
+        "SSSSFF",
+        "SFSDFF",
+        "FMDDDF"
+      ],
+      "animalRows": [
+        "------",
+        "------",
+        "---BBB"
+      ]
+    },
+    {
+      "pieceId": 2,
+      "terrainRows": [
+        "WFFFFF",
+        "WWFDDD",
+        "WMMMMD"
+      ],
+      "animalRows": [
+        "CCC---",
+        "------",
+        "------"
+      ]
+    },
+    {
+      "pieceId": 3,
+      "terrainRows": [
+        "WWFFFS",
+        "WWFMSS",
+        "MMMMSS"
+      ],
+      "animalRows": [
+        "------",
+        "CC----",
+        "C-----"
+      ]
+    },
+    {
+      "pieceId": 4,
+      "terrainRows": [
+        "DDMMMM",
+        "DDMSSS",
+        "DDDFFF"
+      ],
+      "animalRows": [
+        "------",
+        "-----C",
+        "-----C"
+      ]
+    },
+    {
+      "pieceId": 5,
+      "terrainRows": [
+        "WWWMMM",
+        "WDDSMM",
+        "DDSSSS"
+      ],
+      "animalRows": [
+        "------",
+        "-----B",
+        "----BB"
+      ]
+    },
+    {
+      "pieceId": 6,
+      "terrainRows": [
+        "DDWWWF",
+        "MMWWFF",
+        "MSSSSF"
+      ],
+      "animalRows": [
+        "B-----",
+        "B-----",
+        "------"
+      ]
+    }
+  ]
+}
