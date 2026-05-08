@@ -16,10 +16,16 @@ Run frontend only:
 npm run vite
 ```
 
-Run full local server with Socket.IO:
+Run full local server with frontend and Socket.IO:
 
 ```sh
 npm start
+```
+
+Run Socket.IO server only:
+
+```sh
+npm run server
 ```
 
 Open:
@@ -45,24 +51,25 @@ npm run build
 
 Then it publishes `dist`.
 
-Important: GitHub Pages only hosts the static frontend. Online duel needs a Socket.IO server. If the Socket.IO server is deployed separately, set this GitHub Actions repository variable:
+Important: GitHub Pages only hosts the static frontend. Online duel needs the Render Socket.IO server. Set this GitHub Actions repository variable:
 
 ```txt
 VITE_SOCKET_URL=https://your-render-service.onrender.com
 ```
 
-and update the workflow build step to pass it as an env var if needed.
+The workflow already passes this variable into `npm run build`.
 
 ## Render
 
-If deploying the whole game to Render as one Node web service:
+Render is used as a Socket.IO server only. The included `render.yaml` uses:
 
 ```txt
-Build Command: npm install && npm run build
-Start Command: npm start
+Build Command: npm install
+Start Command: npm run server
 ```
 
-Render provides `PORT`; `server.mjs` uses it automatically.
+Render provides `PORT`; `server-only.mjs` uses it automatically.
 
-When frontend and Socket.IO are on the same Render service, no `VITE_SOCKET_URL` is needed.
+After Render deploys, copy the Render service URL into the GitHub repository variable `VITE_SOCKET_URL`, then rerun the GitHub Pages workflow.
 
+`server.mjs` is still available for running frontend and Socket.IO together locally or on a single Node host.
