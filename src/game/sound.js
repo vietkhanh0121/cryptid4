@@ -102,6 +102,11 @@ export function playSoundEffect(effect, enabled = true) {
       tone(ctx, { frequency: 150, duration: 0.04, gain: 0.02 * SFX_VOLUME, type: "sawtooth" });
       tone(ctx, { frequency: 120, duration: 0.06, gain: 0.018 * SFX_VOLUME, type: "sawtooth", delay: 0.05 });
     },
+    asked: () => {
+      tone(ctx, { frequency: 440, duration: 0.055, gain: 0.02 * SFX_VOLUME });
+      tone(ctx, { frequency: 587, duration: 0.055, gain: 0.022 * SFX_VOLUME, delay: 0.06 });
+      tone(ctx, { frequency: 880, duration: 0.09, gain: 0.025 * SFX_VOLUME, delay: 0.12 });
+    },
   };
 
   (patterns[effect] ?? patterns.click)();

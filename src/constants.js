@@ -12,7 +12,7 @@ export const BOARD_PIECE_ROWS = 3;
 export const TERRAIN_LABELS = {
   Desert: "Sa mạc",
   Sea: "Biển",
-  Forest: "Rừng",
+  Forest: "Bãi cỏ",
   Mountain: "Núi",
   Swamp: "Đầm lầy",
 };
@@ -34,7 +34,7 @@ export const TERRAIN_TO_CODE = {
 };
 
 export const ANIMAL_LABELS = {
-  Cougar: "Báo sư tử",
+  Cougar: "Mèo",
   Bear: "Gấu",
   None: "Không có",
 };

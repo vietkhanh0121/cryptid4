@@ -1,141 +1,156 @@
-import Peer from "peerjs";
+import { io } from "socket.io-client";
 
-function peerOptions() {
-  const isSecure = window.location.protocol === "https:";
-  return {
-    host: window.location.hostname,
-    port: window.location.port ? Number(window.location.port) : (isSecure ? 443 : 80),
-    path: "/peerjs",
-    secure: isSecure,
-  };
+function roomCodeFromPeerId(peerId) {
+  return String(peerId ?? "").replace(/^cryptid4-room-/, "");
 }
 
-function waitForOpen(peer) {
-  return new Promise((resolve, reject) => {
-    peer.on("open", (id) => resolve(id));
-    peer.on("error", reject);
-  });
+function socketUrl() {
+  return import.meta.env.VITE_SOCKET_URL || undefined;
 }
 
-function waitForConnectionOpen(connection) {
+function waitForConnect(socket) {
   return new Promise((resolve, reject) => {
-    if (connection.open) {
+    if (socket.connected) {
       resolve();
       return;
     }
-    connection.on("open", resolve);
-    connection.on("error", reject);
+
+    const timer = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("Hết thời gian kết nối đến server online."));
+    }, 15000);
+
+    function cleanup() {
+      window.clearTimeout(timer);
+      socket.off("connect", handleConnect);
+      socket.off("connect_error", handleError);
+    }
+
+    function handleConnect() {
+      cleanup();
+      resolve();
+    }
+
+    function handleError(error) {
+      cleanup();
+      reject(error);
+    }
+
+    socket.once("connect", handleConnect);
+    socket.once("connect_error", handleError);
+  });
+}
+
+function emitAck(socket, event, payload) {
+  return new Promise((resolve, reject) => {
+    socket.timeout(10000).emit(event, payload, (error, response) => {
+      if (error) {
+        reject(new Error("Hết thời gian chờ phản hồi từ server."));
+        return;
+      }
+      if (!response?.ok) {
+        reject(new Error(response?.message ?? "Socket room error"));
+        return;
+      }
+      resolve(response);
+    });
   });
 }
 
 export async function createPeerRoom({
+  peerId,
   role,
   hostPeerId,
   playerId,
   maxPlayers,
+  getState,
   onState,
+  onAction,
   onRoom,
   onStatus,
 }) {
-  const peer = new Peer(undefined, peerOptions());
-  const localPeerId = await waitForOpen(peer);
-  const connections = new Map();
-  const roomPlayers = new Set([playerId]);
-
-  function emitRoom() {
-    onRoom?.([...roomPlayers].sort((a, b) => a - b));
-  }
-
-  function send(connection, message) {
-    if (connection?.open) connection.send(message);
-  }
-
-  function broadcast(message, exceptConnection = null) {
-    for (const connection of connections.values()) {
-      if (connection !== exceptConnection) send(connection, message);
-    }
-  }
-
-  function handleData(connection, data) {
-    if (!data || typeof data !== "object") return;
-
-    if (data.type === "hello") {
-      roomPlayers.add(Number(data.playerId));
-      emitRoom();
-      send(connection, {
-        type: "room",
-        players: [...roomPlayers].sort((a, b) => a - b),
-        maxPlayers,
-      });
-      broadcast({
-        type: "room",
-        players: [...roomPlayers].sort((a, b) => a - b),
-        maxPlayers,
-      }, connection);
-      return;
-    }
-
-    if (data.type === "room") {
-      onRoom?.(data.players ?? []);
-      return;
-    }
-
-    if (data.type === "state") {
-      onState?.(data.state, data.playerId);
-      if (role === "host") {
-        broadcast(data, connection);
-      }
-    }
-  }
-
-  function registerConnection(connection) {
-    connections.set(connection.peer, connection);
-    connection.on("data", (data) => handleData(connection, data));
-    connection.on("close", () => {
-      connections.delete(connection.peer);
-      onStatus?.("Một người chơi đã ngắt kết nối.");
-    });
-    connection.on("error", () => {
-      connections.delete(connection.peer);
-      onStatus?.("Kết nối P2P gặp lỗi.");
-    });
-  }
-
-  peer.on("connection", (connection) => {
-    registerConnection(connection);
-    connection.on("open", () => {
-      onStatus?.(`Peer ${connection.peer} đã kết nối.`);
-    });
+  const code = roomCodeFromPeerId(role === "host" ? peerId : hostPeerId);
+  const socket = io(socketUrl(), {
+    transports: ["websocket", "polling"],
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 500,
+    reconnectionDelayMax: 3000,
   });
 
-  let hostConnection = null;
-  if (role === "guest") {
-    hostConnection = peer.connect(hostPeerId, {
-      reliable: true,
-      metadata: { playerId },
+  let localPlayerId = playerId;
+
+  socket.on("disconnect", () => {
+    onStatus?.("Mất kết nối, đang thử kết nối lại...");
+  });
+
+  socket.on("connect", () => {
+    onStatus?.("Đã kết nối server online.");
+    if (!code) return;
+    if (role === "host") {
+      socket.emit("room:resumeHost", { code, playerId: localPlayerId, state: getState?.() });
+    } else if (localPlayerId) {
+      socket.emit("room:resumeGuest", { code, playerId: localPlayerId });
+    }
+  });
+
+  socket.on("room:state", ({ state }) => {
+    onState?.(state, localPlayerId);
+  });
+
+  socket.on("room:action", ({ kind, payload, playerId: fromPlayer }) => {
+    if (role !== "host") return;
+    onAction?.(kind, payload, Number(fromPlayer));
+  });
+
+  socket.on("room:players", ({ players }) => {
+    onRoom?.(players ?? []);
+  });
+
+  socket.on("room:error", ({ message }) => {
+    onStatus?.(message ?? "Phòng online gặp lỗi.");
+  });
+
+  await waitForConnect(socket);
+
+  if (role === "host") {
+    const response = await emitAck(socket, "room:create", {
+      code,
+      maxPlayers,
+      playerId,
+      state: getState?.(),
     });
-    registerConnection(hostConnection);
-    await waitForConnectionOpen(hostConnection);
-    send(hostConnection, { type: "hello", playerId });
-    onStatus?.("Đã kết nối P2P với chủ phòng.");
+    localPlayerId = Number(response.playerId);
+    onRoom?.(response.players ?? [localPlayerId]);
+    onStatus?.("Phòng online");
   } else {
-    emitRoom();
+    const response = await emitAck(socket, "room:join", {
+      code,
+      playerId,
+    });
+    localPlayerId = Number(response.playerId);
+    onRoom?.(response.players ?? []);
+    onState?.(response.state, localPlayerId);
+    onStatus?.("Phòng online");
   }
 
   return {
-    peerId: localPeerId,
+    peerId: socket.id,
+    playerId: localPlayerId,
     sendState(state) {
-      const message = { type: "state", state, playerId };
-      if (role === "host") {
-        broadcast(message);
-      } else {
-        send(hostConnection, message);
-      }
+      socket.emit("room:state", { code, state, playerId: localPlayerId });
+    },
+    sendAction(kind, payload) {
+      if (role === "host") return;
+      socket.emit("room:action", { code, kind, payload, playerId: localPlayerId });
+    },
+    broadcastState(state) {
+      if (role !== "host") return;
+      socket.emit("room:state", { code, state, playerId: localPlayerId });
     },
     close() {
-      for (const connection of connections.values()) connection.close();
-      connections.clear();
-      peer.destroy();
+      socket.emit("room:leave", { code, playerId: localPlayerId });
+      socket.disconnect();
     },
   };
 }

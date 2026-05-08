@@ -1,6 +1,12 @@
 import React from "react";
 import { BOT_DIFFICULTIES, DIFFICULTY_LABELS } from "../game/config";
 
+const _ANIMAL_MODS = import.meta.glob("../assets/sprites/animal/*.png", { eager: true, import: "default" });
+const _MONSTER_MODS = import.meta.glob("../assets/sprites/monster/*.png", { eager: true, import: "default" });
+function _stem(path) { return path.split("/").pop().replace(/\.png$/, ""); }
+const ANIMAL = Object.fromEntries(Object.entries(_ANIMAL_MODS).map(([p, src]) => [_stem(p), src]));
+const MONSTER = Object.fromEntries(Object.entries(_MONSTER_MODS).map(([p, src]) => [_stem(p), src]));
+
 export function Lobby({
   scenarioData,
   scenarioIndex,
@@ -23,6 +29,21 @@ export function Lobby({
   return (
     <main className="app lobby">
       <section className="lobbyHero">
+        <div className="lobbySpriteRow" aria-hidden="true">
+          <span className="lobbySpriteStack">
+            <img className="lobbySprite lobbySprite-base" src={ANIMAL.Cougar} alt="" />
+            {ANIMAL.Cougar_Anim && <img className="lobbySprite lobbySprite-anim" src={ANIMAL.Cougar_Anim} alt="" />}
+          </span>
+          <span className="lobbySpriteStack lobbySpriteStack-monster">
+            <img className="lobbySprite lobbySprite-base" src={MONSTER.Monster} alt="" />
+            {MONSTER.Monster_Anim && <img className="lobbySprite lobbySprite-anim" src={MONSTER.Monster_Anim} alt="" />}
+            {MONSTER.Monster_Anim2 && <img className="lobbySprite lobbySprite-anim2" src={MONSTER.Monster_Anim2} alt="" />}
+          </span>
+          <span className="lobbySpriteStack">
+            <img className="lobbySprite lobbySprite-base" src={ANIMAL.Bear} alt="" />
+            {ANIMAL.Bear_Anim && <img className="lobbySprite lobbySprite-anim" src={ANIMAL.Bear_Anim} alt="" />}
+          </span>
+        </div>
         <h1>Cryptid</h1>
         <p>
           với em gối
@@ -108,12 +129,18 @@ export function Lobby({
           <div className="roomJoin">
             <input
               value={roomCode}
-              onChange={(event) => setRoomCode(event.target.value.replace(/\D/g, "").slice(0, 2))}
+              onChange={(event) => setRoomCode(event.target.value.replace(/\D/g, "").slice(0, 4))}
               placeholder="MÃ PHÒNG"
               aria-label="Mã phòng"
               inputMode="numeric"
             />
-            <button className="ghostButton" type="button" onClick={onJoinDuel}>Vào</button>
+            <button
+              className={roomCode.trim() ? "primaryButton roomJoinButton" : "ghostButton roomJoinButton"}
+              type="button"
+              onClick={onJoinDuel}
+            >
+              Vào
+            </button>
           </div>
           <p className="networkStatus">{networkStatus}</p>
           <button className="ghostButton" type="button" onClick={() => setLobbyMode(null)}>Quay lại</button>

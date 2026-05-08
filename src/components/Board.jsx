@@ -1,6 +1,6 @@
 import React from "react";
 import { TERRAIN_LABELS } from "../constants";
-import { HINT_STRIPE_ANGLES, PLAYER_COLORS } from "../game/config";
+import { HINT_STRIPE_ANGLES } from "../game/config";
 import { markDropKey, markEntriesForCell, markersForCell, questionEntriesForCell } from "../game/marks";
 
 const HEX_WIDTH = 70;
@@ -39,7 +39,9 @@ function buildKeyedAssets(modules) {
 const TERRAIN_ASSETS = buildTerrainAssets(TERRAIN_ASSET_MODULES);
 const STRUCTURE_ASSETS = buildKeyedAssets(STRUCTURE_ASSET_MODULES);
 const ANIMAL_ASSETS = buildKeyedAssets(ANIMAL_ASSET_MODULES);
-const MONSTER_ASSET = MONSTER_ASSET_MODULES["../assets/sprites/monster/Monster.png"];
+const MONSTER_BASE = MONSTER_ASSET_MODULES["../assets/sprites/monster/Monster.png"];
+const MONSTER_ANIM = MONSTER_ASSET_MODULES["../assets/sprites/monster/Monster_Anim.png"];
+const MONSTER_ANIM2 = MONSTER_ASSET_MODULES["../assets/sprites/monster/Monster_Anim2.png"];
 
 function rawCellLeft(cell) {
   return cell.q * HEX_COL_STEP;
@@ -116,18 +118,19 @@ function AnimalIcon({ animal }) {
   );
 }
 
-function MarkIcon({ value, player, size, x, y, zIndex, dropDelay = 0 }) {
+function MarkIcon({ value, player, size, x, y, zIndex, dropDelay = 0, hidden = false, playerColors }) {
   return (
     <svg
       className={`markSvg markSvg-${value}`}
       viewBox="0 0 40 40"
       style={{
-        "--player-color": PLAYER_COLORS[player],
+        "--player-color": playerColors[player],
         "--mark-size": `${size}px`,
         "--mark-x": `${x}%`,
         "--mark-y": `${y}%`,
         "--mark-z": zIndex,
         "--mark-drop-delay": `${dropDelay}ms`,
+        visibility: hidden ? "hidden" : "visible",
       }}
       aria-hidden="true"
     >
@@ -143,16 +146,27 @@ function MarkIcon({ value, player, size, x, y, zIndex, dropDelay = 0 }) {
   );
 }
 
-function QuestionMark({ player, size, x, y, zIndex }) {
+function MonsterIcon() {
+  return (
+    <span className="monsterStack">
+      <img className="monsterSprite monsterSprite-base" src={MONSTER_BASE} alt="" aria-hidden="true" />
+      {MONSTER_ANIM && <img className="monsterSprite monsterSprite-anim" src={MONSTER_ANIM} alt="" aria-hidden="true" />}
+      {MONSTER_ANIM2 && <img className="monsterSprite monsterSprite-anim2" src={MONSTER_ANIM2} alt="" aria-hidden="true" />}
+    </span>
+  );
+}
+
+function QuestionMark({ player, size, x, y, zIndex, hidden = false, playerColors }) {
   return (
     <span
       className="questionMark"
       style={{
-        "--player-color": PLAYER_COLORS[player],
+        "--player-color": playerColors[player],
         "--mark-size": `${size}px`,
         "--mark-x": `${x}%`,
         "--mark-y": `${y}%`,
         "--mark-z": zIndex,
+        visibility: hidden ? "hidden" : "visible",
       }}
     >
       ?
@@ -173,6 +187,8 @@ export function Board({
   monsterCellId,
   playerCount,
   markDropDelays,
+  hiddenPlayers,
+  playerColors,
 }) {
   const layout = boardLayout(map);
   const selectedCell = selectedCellId ? map.cells.find((cell) => cell.id === selectedCellId) : null;
@@ -225,7 +241,7 @@ export function Board({
                   key={`${player}-${hint.id}`}
                   className="predictionLayer"
                   style={{
-                    "--prediction-color": PLAYER_COLORS[player],
+                    "--prediction-color": playerColors[player],
                     "--hint-stripe-angle": HINT_STRIPE_ANGLES[player - 1],
                     "--prediction-layer-index": index,
                   }}
@@ -254,6 +270,8 @@ export function Board({
                     y={mark.y}
                     zIndex={mark.zIndex}
                     dropDelay={markDropDelays[markDropKey(mark.cellId, mark.player)] ?? 0}
+                    hidden={hiddenPlayers?.has(mark.player) ?? false}
+                    playerColors={playerColors}
                   />
                 ))}
                 {questionEntriesForCell(questionMarks, cell.id, playerCount).map((mark) => (
@@ -264,13 +282,13 @@ export function Board({
                     x={mark.x}
                     y={mark.y}
                     zIndex={mark.zIndex}
+                    hidden={hiddenPlayers?.has(mark.player) ?? false}
+                    playerColors={playerColors}
                   />
                 ))}
               </span>
 
-              {revealMonster && cell.id === monsterCellId && (
-                <img className="monsterSprite" src={MONSTER_ASSET} alt="" aria-hidden="true" />
-              )}
+              {revealMonster && cell.id === monsterCellId && <MonsterIcon />}
             </button>
           );
         })}

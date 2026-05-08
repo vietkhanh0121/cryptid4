@@ -1,271 +1,329 @@
 # Cryptid4 AI Handoff Notes
 
-Read this file first before changing the project. It documents the current architecture, data flow, gameplay state, asset conventions, and known next-step risks.
+Đọc file này trước khi chỉnh sửa project. Mô tả kiến trúc, data flow, UI hiện tại, và toàn bộ thay đổi đã thực hiện tính đến 2026-05-08.
 
-## Project Summary
+---
 
-Cryptid4 is a Vite + React single-page board game inspired by Cryptid. It loads prebuilt scenario data from `public/cryptid-scenario.json`, renders a hex board, supports Solo and LAN Duel modes, tracks player X/O marks and temporary `?` marks, runs automatic bot turns, shows hint overlays, animates selected sprites, and reveals the monster when a correct guess is made.
-
-Run locally:
+## Chạy local
 
 ```bash
-npm start
+# Solo (không cần LAN):
+npm run vite          # → http://localhost:5173
+
+# Duel LAN (PeerJS signaling):
+npm start             # → http://localhost:5173
+
+# Hoặc dùng script:
+./run-local.sh        # Solo
+./run-local.sh lan    # Duel LAN
 ```
 
-Local URL:
+`npm start` chạy `server.mjs` (Express + Vite + PeerJS).  
+`npm run vite` chạy Vite thuần, đủ để chơi Solo.
 
-```text
-http://localhost:5173/
+---
+
+## Tổng quan project
+
+Cryptid4 là game board dạng SPA (Vite + React). Người chơi dùng hint để suy ra vị trí quái vật trên bản đồ lục giác. Hỗ trợ Solo (P1 người, P2/P3 bot) và Duel LAN (nhiều người thật qua PeerJS WebRTC).
+
+---
+
+## Các file quan trọng
+
+| File | Vai trò |
+|------|---------|
+| `src/main.jsx` | App chính: toàn bộ state, game logic, JSX render |
+| `src/styles.css` | Toàn bộ CSS |
+| `src/hints.js` | Định nghĩa 24 positive + các negative hint |
+| `src/constants.js` | Terrain, animal, structure, color labels (tiếng Việt) |
+| `src/game/config.js` | `generatePlayerColors()`, `PLAYER_COLORS`, bot config |
+| `src/game/scenario.js` | `loadPuzzleForScenario()` — load map + hints từ JSON |
+| `src/game/sound.js` | Tất cả sound effects (Web Audio API, không file âm thanh ngoài) |
+| `src/game/marks.js` | Logic vị trí mark X/O/? trên ô hex |
+| `src/components/Board.jsx` | Render bản đồ, mark, overlay hint, MonsterIcon |
+| `src/components/Lobby.jsx` | Màn hình lobby, sprite row trang trí |
+| `src/network/peerRoom.js` | PeerJS WebRTC room host/guest |
+| `public/cryptid-scenario.json` | Dữ liệu màn chơi (version 2, có embedded map) |
+| `run-local.sh` | Script khởi động nhanh |
+
+---
+
+## Cấu hình build (đã sửa)
+
+- `vite.config.js`: đã thêm `@vitejs/plugin-react` — **bắt buộc**, không có thì JSX không compile
+- `package.json`: đã thêm `"type": "module"` — bắt buộc vì `vite.config.js` và `server.mjs` dùng ESM
+
+---
+
+## Data flow
+
+1. App fetch `public/cryptid-scenario.json`
+2. `loadPuzzleForScenario()` đọc scenario, resolve hints qua `buildHintPool()`
+3. **Quan trọng**: `scenario.js` line 157 luôn dùng `definition.text` (từ `hints.js`), bỏ qua `hint.text` trong JSON — vì JSON có thể chứa text cũ
+4. Hint `check()` function dùng để tô màu overlay trên bản đồ
+5. `PLAYER_COLORS` và `turnOrder` đều được random mỗi lần vào game mới
+
+---
+
+## UI Layout — màn game (từ trên xuống)
+
+```
+[ Status Bar ]          ← ẩn khi game over
+[ Hint Bar ]            ← luôn hiện; khi game over hiện hint tất cả người chơi
+[ Mark Toggles ]        ← ẩn khi game over
+[ Action Grid ]         ← Hỏi / ☰ / Đoán (hoặc Ván mới / ☰ / Đoán khi game over)
+[ Board ]
 ```
 
-LAN URL depends on the machine IP, commonly:
+### Status Bar (`.statusPanel`)
 
-```text
-http://192.168.31.123:5173/
+- Cột trái (`.turnStatus`): "Lượt bạn" hoặc "Lượt [■]" (ô vuông màu người chơi kia)
+- Dấu phân cách dọc (`.statusDivider`)
+- Message: P1/P2/P3 trong chuỗi được tự động thay bằng ô vuông màu qua `renderMessage(text, playerColors)`
+
+### Hint Bar (`.hintList` > `.hintCard`)
+
+Mỗi card có 2 hàng:
+```
+Hàng 1 (.hintHeader):   [toggle switch]  [■] "Gợi ý của bạn" / "Gợi ý của [■]"
+Hàng 2 (.hintContent):  [HintVisual sprites]  |  [hintText đầy đủ]
 ```
 
-Validate build:
+- Toggle switch bật/tắt overlay tô màu trên bản đồ
+- `HintVisual`: render sprites + ký hiệu `≤N` / `>N` / `/` / `✕`
+- Khi game over: hiện hint của tất cả người chơi
 
-```bash
-npx vite build
+### Mark Toggles (`.playerMarkToggles`)
+
+- Nút toggle ẩn/hiện mark của từng người chơi (không ảnh hưởng animation)
+- Người chơi luôn ở đầu, hiện chữ "Bạn"; người khác chỉ có toggle, không có chữ
+- Tự động bật lại tất cả khi có mark mới được đặt (`useEffect` theo `marks`)
+- Dùng `visibility: hidden` thay vì unmount để tránh re-trigger animation `markDrop`
+
+### Action Grid
+
+- Bình thường: `[Hỏi] [☰] [Đoán]`
+- Khi game over: `[Ván mới (highlighted)] [☰] [Đoán (disabled)]`
+- Nút ☰ mở Settings overlay
+
+### Settings Overlay
+
+- Tiêu đề + nút đóng
+- Game info (mode, room code, scenario, độ khó) — chỉ hiện khi `screen === "game"`
+- Nút Sảnh / Ván mới — chỉ hiện khi `screen === "game"`
+- Toggle âm thanh
+- **Danh sách gợi ý** — chỉ hiện khi `screen === "game"` (ẩn ở Lobby)
+
+---
+
+## UI Layout — màn Lobby
+
+```
+[ lobbySpriteRow ]   ← Cougar / Monster / Bear sprite animation (trang trí)
+[ h1 "Cryptid" ]
+[ subtitle text ]
+[ lobbyPanel: chọn chế độ / solo / competitive ]
 ```
 
-`npm start` runs `server.mjs`, which wraps Vite and adds lightweight LAN room APIs. `npm run vite` runs plain Vite without the LAN room server.
+### lobbySpriteRow
 
-There is no `build` script in `package.json`.
+- 3 sprite xếp hàng ngang, `align-items: flex-end`
+- **Cougar** (trái): 33×33px, 2 frame (Bear_Anim), 1s cycle
+- **Monster** (giữa): 62×67px, 3 frame ping-pong, 2s cycle
+- **Bear** (phải): 33×33px, 2 frame (Bear_Anim), 1s cycle
+- Tất cả có stroke trắng qua `drop-shadow` 4 hướng
+- Animation stagger: Cougar delay 0, Monster delay −0.67s, Bear delay −0.5s
+- Sprite imports dùng `import.meta.glob` trong `Lobby.jsx`
 
-## Important Files
+### Màu chữ nhỏ lobby
 
-- `src/main.jsx`: Main React app. Handles scenario loading, lobby, Solo/Duel modes, board rendering, player marks, temporary `?` marks, bot turns, LAN sync, selected-cell shadow, sprite animation, monster reveal, and legacy scenario fallback hydration.
-- `src/styles.css`: All UI layout and sprite styling, including selected-cell shadow, mark positions, structure/animal shadows, and selected-sprite animations.
-- `server.mjs`: Local LAN test server. Serves Vite and provides in-memory room create/join/state/SSE APIs under `/api/rooms`.
-- `public/cryptid-scenario.json`: Runtime source of truth for normal gameplay. Current file is `version: 2` and includes full playable maps in `scenario.map.cells`.
-- `public/mapData.json`: Legacy map-piece source. Normal gameplay should not fetch this when scenario JSON includes `map.cells`.
-- `src/mapGenerator.js`: Map helpers and legacy `generateMapFromScenario()`.
-- `src/hints.js`: Hint definitions and check functions.
-- `src/constants.js`: Terrain, animal, structure, color constants and labels.
-- `src/puzzleGenerator.js`: Older generation/search tooling. Keep for regeneration/tooling; normal playback should not depend on it.
-- `src/assets/sprites/`: Runtime sprites for terrain, animals, structures, shadows, and monster.
+- `.lobbyHero p`, `.lobbyPanel p`, `.networkStatus`: dùng `#a8c4e0` (đã đổi từ `--pixel-muted` = `#6080ad`)
 
-## Current Runtime Data Flow
+---
 
-On app startup, `src/main.jsx` fetches:
+## Player Colors
 
-```text
-/cryptid-scenario.json
+```js
+// src/game/config.js
+const _COLOR_PALETTE = ["#e63946", "#f4d03f", "#00b4d8", "#57cc99", "#c77dff"];
+export function generatePlayerColors() { ... } // shuffle 5 màu
+export const PLAYER_COLORS = generatePlayerColors(); // giá trị mặc định lúc load
 ```
 
-For each selected scenario:
+- `main.jsx` giữ `playerColors` trong state: `useState(PLAYER_COLORS)`
+- Re-shuffle khi gọi `startSolo()`, `createDuelRoom()`, `joinDuelRoom()`
+- Truyền xuống `Board` qua prop — Board không import `PLAYER_COLORS` trực tiếp
 
-1. `loadPuzzleForScenario()` reads the scenario.
-2. If `scenario.map.cells` exists, `mapFromScenarioJson()` uses the embedded board directly.
-3. Hint IDs from `scenario.hints` are resolved through `buildHintPool()`.
-4. `hint.player` from JSON is preserved, so P1/P2/P3 hint ownership is stable.
-5. `resolveMonsterFromMap()` finds the monster cell from `scenario.monster.cellId`.
-6. Conflict metadata checks arrangement, unique solution, missing hints, and `solution.possibleCellIds`.
+---
 
-Legacy fallback still exists:
+## Turn Order (random mỗi ván)
 
-- If a scenario lacks `map.cells`, `generateMapFromScenario()` rebuilds cells from `scenario.pieces`.
-- `hydrateScenarioStructures()` can place structures for old data.
-- This should not run for the current `public/cryptid-scenario.json`.
-
-## Game Modes
-
-The app starts in a lobby.
-
-### Solo
-
-- P1 is human.
-- Bot P2 and Bot P3 run automatically.
-- Bot difficulty is selected in lobby: `Easy`, `Hard`, `Expert`.
-- Turn order is currently `P1 -> P2 -> P3 -> P1`.
-- Bots do not guess the true monster cell by design.
-
-### Duel LAN
-
-- P1 creates a room.
-- P2 joins with the room code.
-- Bot P3 runs automatically on the host only.
-- Room sync is LAN/local-test only and in-memory in `server.mjs`.
-- Restarting `server.mjs` clears all rooms.
-- The client ignores SSE state echoes from itself to avoid losing local UI selection/action state.
-
-## Turn And Bot State
-
-Important state in `src/main.jsx`:
-
-- `currentTurn`: player ID whose turn it is.
-- `turnNumber`: visible turn counter.
-- `pendingPenalty`: blocks turn advancement until the owning player places penalty X.
-- `lastAutoBotKeyRef`: prevents one bot from acting twice for the same scenario/turn/player key.
-
-Auto bot guard:
-
-- Bot runs only when `screen === "game"`.
-- Bot runs only if `currentTurn` is in `botPlayers`.
-- In Duel, bot runs only on host and only after 2 players are in room.
-- Bot timer uses difficulty config from `BOT_DIFFICULTIES`.
-
-## Marks And Temporary Question Marks
-
-X/O marks:
-
-- Stored in `marks[cellId][player]`.
-- Rendered with `MarkIcon`.
-- Mark positions use `markPositionForPlayer()` with fixed hex-corner positions for 3+ players.
-
-Temporary `?` marks:
-
-- Stored in `questionMarks[cellId][player]`.
-- Rendered at the same position as that player's real mark.
-- Can be placed at any time while game is not over, including outside the player's turn.
-- Cannot be placed on a cell where that player already has an X/O mark.
-- Clicking a cell with a `?` only selects it; the `?` toggles only via the `?` control button.
-- Any real mark placed on a cell clears all temporary `?` marks on that cell.
-- New Game clears all temporary `?` marks.
-- Duel sync includes `questionMarks`.
-
-## Visual And Asset State
-
-Terrain:
-
-- Only terrain `_1` sprites are kept:
-  - `Desert_1.png`
-  - `Forest_1.png`
-  - `Mountain_1.png`
-  - `Sea_1.png`
-  - `Swamp_1.png`
-- Terrain `_2` and `_3` sprites were deleted from `src/assets/sprites/terrain`.
-- Random terrain sprite selection was removed. Each terrain now maps directly to its `_1` sprite.
-- `terrain_iso_backup` still contains old terrain variants as backup/reference.
-
-Animal:
-
-- Base:
-  - `Bear.png`
-  - `Cougar.png`
-- Animation frame:
-  - `Bear_Anim.png`
-  - `Cougar_Anim.png`
-- Shadow:
-  - `Animal_Shadow.png`
-- Bear sprite is larger than default animal sprite (`23px` vs `19px`).
-
-Structure:
-
-- Base sprites exist for all colors and types.
-- Pillar animation frames:
-  - `*_Pillar_Anim.png`
-  - `*_Pillar_Anim2.png`
-  - `*_Pillar_Anim3.png`
-- Tent animation frames:
-  - `*_Tent_Anim.png`
-  - `*_Tent_Anim2.png`
-- Structure shadows:
-  - `Pillar_Shadow.png`
-  - `Tent_Shadow.png`
-
-Monster:
-
-- `Monster.png` reveals automatically when a human guess hits the monster cell.
-- Manual Monster toggle still exists in the top panel.
-
-## Animation Rules
-
-Selected animal:
-
-- Uses 2 image frames: base + `_Anim`.
-- Runs at 2fps.
-- Loops indefinitely while the containing hex is selected.
-- Also bobs along Y axis with a small `translateY(-2px)` step.
-
-Selected tent:
-
-- Uses 3 image states in a 2s loop at 2fps:
-  - base
-  - `_Anim`
-  - `_Anim2`
-  - `_Anim`
-
-Selected pillar:
-
-- Uses 4 image states in a 2s loop at 2fps:
-  - base
-  - `_Anim`
-  - `_Anim2`
-  - `_Anim3`
-
-Selected structure shadow:
-
-- Loops in 2s, hard stepped.
-
-Selected cell shadow:
-
-- Rendered as a separate `.selectedHexShadow` element, not `filter: drop-shadow()`.
-- Offset is currently `10px 10px`.
-- Solid black, opacity 50%, no blur.
-- It is placed behind the selected cell but above surrounding cells.
-
-Reason for separate shadow element:
-
-- Applying `filter: drop-shadow()` directly on `.hex.selected` was unreliable because `.hex` uses `clip-path`; the shadow outside the clipped hex was not visibly cast onto neighboring cells.
-
-## Current UI Notes
-
-- Top panel shows current status/message, player hint, Monster toggle, bot status, and possible hints.
-- Debug strip was removed from the visible UI.
-- Bottom dock only shows action controls.
-- Header shows mode, bot difficulty or room code, turn number, actor, scenario ID, and score.
-
-## Network Sync Notes
-
-Room state sync includes persistent gameplay state such as:
-
-- scenario index
-- hint deal seed
-- marks
-- temporary question marks
-- current turn
-- turn number
-- pending penalty
-- reveal monster
-- game over
-
-State sync intentionally avoids reacting to local UI-only state from the same client. The client ignores state events where `payload.playerId === localPlayer`.
-
-Avoid syncing transient local UI details like selecting a cell or opening the Ask target picker unless it is explicitly part of shared gameplay.
-
-## Validation Status
-
-Most recent validation before this handoff:
-
-```bash
-npx vite build
+```js
+// main.jsx
+const [turnOrder, setTurnOrder] = useState([1, 2, 3]);
 ```
 
-passed after the latest changes.
+- Được shuffle bằng `shuffledItems()` mỗi lần `resetForScenario()` hoặc `createDuelRoom()`
+- `currentTurn` khởi đầu = `turnOrder[0]` (không còn hardcode = 1)
+- Được sync qua mạng trong `gameSnapshot` / `applyGameSnapshot` cho Duel mode
+- `botGuess` dùng `turnOrder` thay vì hardcode `[1, 2, 3]`
 
-## Known Risks / Next Development Notes
+---
 
-- `src/main.jsx` is large. Future work should consider extracting components/hooks:
-  - `Lobby`
-  - `Board`
-  - `useScenarioPuzzle`
-  - `useRoomSync`
-  - `useBotTurns`
-  - `marks/questionMarks` helpers
-- LAN Duel is test-only. It has no persistence, auth, reconnection protocol, or conflict resolution beyond simple last-state sync.
-- Bot strategy is simple and intentionally prevents bots from guessing the monster. Future AI can be improved without changing the scenario format.
-- Animation frames are hand/generated variants and may need artist review.
-- Selected-cell shadow is currently a separate hex element with fixed `10px 10px` offset. If board layering changes, verify it remains below selected cell and above neighbors.
-- Temporary `?` marks are synced and support multiple players, but the UI only gives the local human a `?` button.
-- Current gameplay supports 3-player scenarios best. Some helper code allows more players, but game rules/UI are mainly tuned for P1/P2/P3.
+## Monster Sprite & Animation
 
-## Backup
+### Files
 
-A fresh project backup should be created before the next development phase. The backup generated with this handoff is stored outside the project under:
+| File | Mô tả |
+|------|-------|
+| `src/assets/sprites/monster/Monster.png` | Frame 1: mắt mở (186×201px) |
+| `src/assets/sprites/monster/Monster_Anim.png` | Frame 2: mắt nửa nhắm |
+| `src/assets/sprites/monster/Monster_Anim2.png` | Frame 3: mắt nhắm hoàn toàn |
 
-```text
-/Users/admin/Documents/GAME/backups/
+### Animation — ping-pong 3 frame
+
+| Thời gian | Frame |
+|-----------|-------|
+| 0–0.5s | Mắt mở (base) |
+| 0.5–1s | Mắt nửa (anim) |
+| 1–1.5s | Mắt nhắm (anim2) |
+| 1.5–2s | Mắt nửa (anim) — ping-pong về |
+
+- 2fps, duration 2s, `steps(1, end)`, loop
+- CSS keyframes: `monsterBaseFrame`, `monsterAnimFrame`, `monsterAnim2Frame`
+- Dùng chung cho cả Board (in-game) và Lobby (trang trí)
+
+### MonsterIcon component (Board.jsx)
+
+```jsx
+function MonsterIcon() {
+  return (
+    <span className="monsterStack">
+      <img className="monsterSprite monsterSprite-base" src={MONSTER_BASE} ... />
+      <img className="monsterSprite monsterSprite-anim" src={MONSTER_ANIM} ... />
+      <img className="monsterSprite monsterSprite-anim2" src={MONSTER_ANIM2} ... />
+    </span>
+  );
+}
 ```
+
+- `.monsterStack`: 48×51px (1.5× so với size gốc 32×34px), absolute centered trên hex
+- Chỉ render khi `revealMonster === true && cell.id === monsterCellId`
+- Nút toggle monster (`monsterToggle`) đã bị **ẩn** khỏi UI (button vẫn còn trong code, logic `revealMonster` state vẫn hoạt động)
+
+---
+
+## Hint System
+
+### Loại hint (hints.js)
+
+| Hàm | Text positive | Text negative |
+|-----|--------------|---------------|
+| `inEitherTerrain(x,y)` | Quái vật nằm trong X hoặc Y. | — |
+| `notInEitherTerrain(x,y)` | — | Quái vật không nằm trong X và Y. |
+| `nearTerrain(x)` | ...trong vòng 1 ô tính từ X. | Quái vật > 1 ô so với X. |
+| `nearAnyAnimal()` | ...trong vòng 1 ô tính từ động vật bất kỳ. | Quái vật > 1 ô so với động vật bất kỳ. |
+| `nearAnimalType(a)` | ...trong vòng 2 ô tính từ A. | Quái vật > 2 ô so với A. |
+| `nearStructureType(t)` | ...trong vòng 2 ô tính từ T bất kỳ. | Quái vật > 2 ô so với T. |
+| `nearStructureColor(c)` | ...trong vòng 3 ô tính từ công trình C bất kỳ. | Quái vật > 3 ô so với công trình màu C. |
+
+**24 positive hints tổng cộng**: 10 địa hình kép + 5 gần địa hình + 1 bất kỳ + 2 loài + 2 công trình + 4 màu
+
+### Visual field
+
+Mỗi hint có `visual` dùng cho `HintVisual` component:
+```js
+{ type: "in_either" | "not_either" | "distance", positive, dist, subjects: [{kind, value}] }
+```
+`kind`: `terrain`, `any_animal`, `animal`, `structure_type`, `structure_color`
+
+### Constants (tiếng Việt)
+
+```
+Terrain: Desert=Sa mạc, Sea=Biển, Forest=Rừng, Mountain=Núi, Swamp=Đầm lầy
+Animals: Cougar=Mèo, Bear=Gấu
+Structures: Tent=Lều, Pillar=Cột đá
+Colors: Green=xanh lá, Blue=xanh dương, White=trắng, Black=đen
+```
+
+---
+
+## Sound Effects (sound.js)
+
+| Key | Khi nào |
+|-----|---------|
+| `click` | Nhấn nút chung |
+| `select` | Chọn ô |
+| `toggle` | Toggle switch |
+| `mark` | Đặt mark X/O |
+| `question` | Đặt/bỏ dấu ? |
+| `ask` | Người chơi hỏi |
+| `asked` | **Bị người khác hỏi** (trigger qua `useEffect` theo `pendingAnswer`) |
+| `guess` | Đoán |
+| `start` | Bắt đầu game |
+| `success` | Thắng |
+| `fail` | Đoán sai |
+| `denied` | Hành động không hợp lệ |
+
+---
+
+## State quan trọng (main.jsx)
+
+| State | Mô tả |
+|-------|-------|
+| `playerColors` | Object `{1..5: color}`, random mỗi lần vào game |
+| `turnOrder` | Array player IDs theo thứ tự lượt, random mỗi ván mới |
+| `hiddenPlayers` | Set player IDs đang bị ẩn mark |
+| `marks` | `{cellId: {player: "X"/"O"}}` |
+| `questionMarks` | `{cellId: {player: true}}` |
+| `pendingPenalty` | `{player}` — chờ đặt X phạt |
+| `pendingAnswer` | `{asker, target, cellId}` — chờ trả lời |
+| `activeOverlays` | Array player IDs đang bật hint overlay |
+| `gameOver` | `{title, body}` hoặc null |
+| `humanPlayer` | ID người chơi thật (Solo=1, Duel=localPlayer) |
+| `revealMonster` | Boolean — hiện sprite quái vật trên board |
+
+---
+
+## Marks & Animation
+
+- Mark dùng `visibility: hidden` (không unmount) để tránh re-trigger animation `markDrop`
+- `markDropDelays`: stagger animation khi nhiều mark drop cùng lúc (80ms/mark)
+- `hiddenPlayers` chỉ ảnh hưởng display, không ảnh hưởng logic
+
+---
+
+## Network (Duel LAN)
+
+- PeerJS WebRTC, signaling qua `server.mjs`
+- Host = P1, Guest = P2 (hoặc nhiều hơn)
+- Bot P3 chỉ chạy trên host
+- State sync: marks, turns, `turnOrder`, pendingPenalty, pendingAnswer, questionMarks, gameOver, revealMonster
+- `playerColors` **không sync** — mỗi client có màu riêng
+
+---
+
+## Sprite Animation System (CSS)
+
+### In-game (Board): chỉ animate khi ô được chọn (`.hex.selected`)
+
+- Animal 2-frame: `selectedBaseFrame` / `selectedAnimFrame`, 1s
+- Structure 4-frame: `selectedStructureBaseFrame` … `selectedPillarAnim3Frame`, 2s
+- Monster 3-frame ping-pong: `monsterBaseFrame` / `monsterAnimFrame` / `monsterAnim2Frame`, 2s — **luôn animate** (không cần `.hex.selected`)
+
+### Lobby: luôn animate
+
+- Animal 2-frame: `lobbyAnimalBase` / `lobbyAnimalAnim`, 1s
+- Monster: reuse keyframes `monsterBaseFrame` / `monsterAnimFrame` / `monsterAnim2Frame`, 2s
+- Tất cả dùng `steps(1, end)` để có hard cut giữa frames (pixel art style)
+
+---
+
+## Các rủi ro / lưu ý
+
+- `src/main.jsx` rất lớn — cân nhắc tách hook/component khi refactor
+- `scenario.js` line 157 dùng `definition.text` thay `hint.text` từ JSON — nếu thêm text mới phải sửa `hints.js`, không sửa JSON
+- `Board.jsx` nhận `playerColors` qua prop, `MarkIcon`/`QuestionMark` cũng nhận prop này — không import trực tiếp
+- LAN Duel chỉ test local, không có auth/reconnect
+- `turnOrder` phải được include trong `gameSnapshot` khi sync Duel — đã làm, đừng bỏ sót khi thêm field mới

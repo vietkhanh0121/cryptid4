@@ -28,6 +28,7 @@ export function inEitherTerrain(x, y) {
     positive: true,
     text: `Quái vật nằm trong ${terrainName(x)} hoặc ${terrainName(y)}.`,
     check: (cell) => cell.terrain === x || cell.terrain === y,
+    visual: { type: "in_either", subjects: [{ kind: "terrain", value: x }, { kind: "terrain", value: y }] },
   };
 }
 
@@ -37,6 +38,7 @@ export function notInEitherTerrain(x, y) {
     positive: false,
     text: `Quái vật không nằm trong ${terrainName(x)} và ${terrainName(y)}.`,
     check: (cell) => cell.terrain !== x && cell.terrain !== y,
+    visual: { type: "not_either", subjects: [{ kind: "terrain", value: x }, { kind: "terrain", value: y }] },
   };
 }
 
@@ -45,13 +47,14 @@ export function nearTerrain(x, positive = true) {
     id: `${positive ? "near" : "not_near"}_terrain_${x}_1`,
     positive,
     text: positive
-      ? `Quái vật <= 1 ô so với ${terrainName(x)}.`
+      ? `Quái vật nằm trong vòng 1 ô tính từ ${terrainName(x)}.`
       : `Quái vật > 1 ô so với ${terrainName(x)}.`,
     check: (cell, map) => {
       const targets = map.cells.filter((c) => c.terrain === x);
       const result = withinDistance(cell, targets, 1);
       return positive ? result : !result;
     },
+    visual: { type: "distance", positive, dist: 1, subjects: [{ kind: "terrain", value: x }] },
   };
 }
 
@@ -60,13 +63,14 @@ export function nearAnyAnimal(maxDistance = 1, positive = true) {
     id: `${positive ? "near" : "not_near"}_any_animal_${maxDistance}`,
     positive,
     text: positive
-      ? `Quái vật <= ${maxDistance} ô so với động vật bất kỳ.`
+      ? `Quái vật nằm trong vòng ${maxDistance} ô tính từ động vật bất kỳ.`
       : `Quái vật > ${maxDistance} ô so với động vật bất kỳ.`,
     check: (cell, map) => {
       const targets = map.cells.filter((c) => c.animal);
       const result = withinDistance(cell, targets, maxDistance);
       return positive ? result : !result;
     },
+    visual: { type: "distance", positive, dist: maxDistance, subjects: [{ kind: "any_animal" }] },
   };
 }
 
@@ -75,13 +79,14 @@ export function nearAnimalType(animal, maxDistance = 2, positive = true) {
     id: `${positive ? "near" : "not_near"}_animal_${animal}_${maxDistance}`,
     positive,
     text: positive
-      ? `Quái vật <= ${maxDistance} ô so với ${animalName(animal)}.`
+      ? `Quái vật nằm trong vòng ${maxDistance} ô tính từ ${animalName(animal)}.`
       : `Quái vật > ${maxDistance} ô so với ${animalName(animal)}.`,
     check: (cell, map) => {
       const targets = map.cells.filter((c) => c.animal === animal);
       const result = withinDistance(cell, targets, maxDistance);
       return positive ? result : !result;
     },
+    visual: { type: "distance", positive, dist: maxDistance, subjects: [{ kind: "animal", value: animal }] },
   };
 }
 
@@ -90,13 +95,14 @@ export function nearStructureType(type, maxDistance = 2, positive = true) {
     id: `${positive ? "near" : "not_near"}_structure_type_${type}_${maxDistance}`,
     positive,
     text: positive
-      ? `Quái vật <= ${maxDistance} ô so với ${structureName(type)}.`
+      ? `Quái vật nằm trong vòng ${maxDistance} ô tính từ ${structureName(type)} bất kỳ.`
       : `Quái vật > ${maxDistance} ô so với ${structureName(type)}.`,
     check: (cell, map) => {
       const targets = map.cells.filter((c) => c.structure?.type === type);
       const result = withinDistance(cell, targets, maxDistance);
       return positive ? result : !result;
     },
+    visual: { type: "distance", positive, dist: maxDistance, subjects: [{ kind: "structure_type", value: type }] },
   };
 }
 
@@ -105,13 +111,14 @@ export function nearStructureColor(color, maxDistance = 3, positive = true) {
     id: `${positive ? "near" : "not_near"}_structure_color_${color}_${maxDistance}`,
     positive,
     text: positive
-      ? `Quái vật <= ${maxDistance} ô so với công trình màu ${colorName(color)}.`
+      ? `Quái vật nằm trong vòng ${maxDistance} ô tính từ công trình ${colorName(color)} bất kỳ.`
       : `Quái vật > ${maxDistance} ô so với công trình màu ${colorName(color)}.`,
     check: (cell, map) => {
       const targets = map.cells.filter((c) => c.structure?.color === color);
       const result = withinDistance(cell, targets, maxDistance);
       return positive ? result : !result;
     },
+    visual: { type: "distance", positive, dist: maxDistance, subjects: [{ kind: "structure_color", value: color }] },
   };
 }
 

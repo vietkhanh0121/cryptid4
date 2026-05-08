@@ -3,30 +3,161 @@ import { createRoot } from "react-dom/client";
 import { Board } from "./components/Board";
 import { Lobby } from "./components/Lobby";
 import { buildHintPool } from "./hints";
-import { BOT_DIFFICULTIES, DEFAULT_BOT_DIFFICULTY, DIFFICULTY_LABELS, PLAYER_COLORS, playerIdsForCount } from "./game/config";
+import { BOT_DIFFICULTIES, DEFAULT_BOT_DIFFICULTY, DIFFICULTY_LABELS, PLAYER_COLORS, generatePlayerColors, playerIdsForCount } from "./game/config";
+import { computePenaltyX, decideBotAction, selectAskCell, selectAskTarget, selectGuessCell } from "./game/botAI";
 import { markDropKey, markersForCell, setCellMark } from "./game/marks";
 import { randomItem, shuffledItems } from "./game/randomUtils";
 import { loadPuzzleForScenario, resolveMonsterCellId } from "./game/scenario";
-import { playSoundEffect, startBackgroundMusic, stopBackgroundMusic, unlockAudio } from "./game/sound";
+import { playSoundEffect, unlockAudio } from "./game/sound";
 import { createPeerRoom } from "./network/peerRoom";
 import "./styles.css";
 
 const IS_DEBUG_PAGE = window.location.pathname.includes("index-debug");
+const ROOM_CODE_LENGTH = 4;
+
+const _SPRITE_STEM = (path) => path.split("/").pop().replace(/\.png$/, "");
+const _TERRAIN_MODS = import.meta.glob("./assets/sprites/terrain/*.png", { eager: true, import: "default" });
+const _ANIMAL_MODS = import.meta.glob("./assets/sprites/animal/*.png", { eager: true, import: "default" });
+const _STRUCT_MODS = import.meta.glob("./assets/sprites/structure/*.png", { eager: true, import: "default" });
+
+const HINT_TERRAIN_SPRITES = Object.fromEntries(
+  Object.entries(_TERRAIN_MODS)
+    .filter(([p]) => _SPRITE_STEM(p).endsWith("_1"))
+    .map(([p, src]) => [_SPRITE_STEM(p).replace(/_1$/, ""), src])
+);
+const HINT_ANIMAL_SPRITES = Object.fromEntries(
+  Object.entries(_ANIMAL_MODS)
+    .filter(([p]) => !_SPRITE_STEM(p).includes("Anim") && !_SPRITE_STEM(p).includes("Shadow"))
+    .map(([p, src]) => [_SPRITE_STEM(p), src])
+);
+const HINT_STRUCTURE_SPRITES = Object.fromEntries(
+  Object.entries(_STRUCT_MODS)
+    .filter(([p]) => !_SPRITE_STEM(p).includes("Anim") && !_SPRITE_STEM(p).includes("Shadow"))
+    .map(([p, src]) => [_SPRITE_STEM(p), src])
+);
+
+function HintVisual({ visual, text }) {
+  if (!visual) return <b>{text}</b>;
+
+  function getSprites(subject) {
+    if (subject.kind === "terrain") return [{ src: HINT_TERRAIN_SPRITES[subject.value], alt: subject.value }];
+    if (subject.kind === "animal") return [{ src: HINT_ANIMAL_SPRITES[subject.value], alt: subject.value }];
+    if (subject.kind === "any_animal") return [
+      { src: HINT_ANIMAL_SPRITES.Bear, alt: "Bear" },
+      { src: HINT_ANIMAL_SPRITES.Cougar, alt: "Cougar" },
+    ];
+    if (subject.kind === "structure_type") return [{ src: HINT_STRUCTURE_SPRITES[`White_${subject.value}`], alt: subject.value }];
+    if (subject.kind === "structure_color") return [
+      { src: HINT_STRUCTURE_SPRITES[`${subject.value}_Pillar`], alt: `${subject.value} Pillar` },
+      { src: HINT_STRUCTURE_SPRITES[`${subject.value}_Tent`], alt: `${subject.value} Tent` },
+    ];
+    return [];
+  }
+
+  if (visual.type === "distance") {
+    const sprites = visual.subjects.flatMap(getSprites);
+    return (
+      <span className="hintVisual">
+        <span className={`hintOp ${visual.positive ? "hintOp-pos" : "hintOp-neg"}`}>
+          {visual.positive ? `≤${visual.dist}` : `>${visual.dist}`}
+        </span>
+        {sprites.map((s, i) => <img key={i} className="hintSprite" src={s.src} alt={s.alt} />)}
+      </span>
+    );
+  }
+
+  if (visual.type === "in_either") {
+    const s0 = getSprites(visual.subjects[0]);
+    const s1 = getSprites(visual.subjects[1]);
+    return (
+      <span className="hintVisual">
+        {s0.map((s, i) => <img key={`a${i}`} className="hintSprite" src={s.src} alt={s.alt} />)}
+        <span className="hintSep">/</span>
+        {s1.map((s, i) => <img key={`b${i}`} className="hintSprite" src={s.src} alt={s.alt} />)}
+      </span>
+    );
+  }
+
+  if (visual.type === "not_either") {
+    const s0 = getSprites(visual.subjects[0]);
+    const s1 = getSprites(visual.subjects[1]);
+    return (
+      <span className="hintVisual hintVisual-neg">
+        <span className="hintSep">✕</span>
+        {s0.map((s, i) => <img key={`a${i}`} className="hintSprite" src={s.src} alt={s.alt} />)}
+        <span className="hintSep">✕</span>
+        {s1.map((s, i) => <img key={`b${i}`} className="hintSprite" src={s.src} alt={s.alt} />)}
+      </span>
+    );
+  }
+
+  return <b>{text}</b>;
+}
+
+function catalogHintText(hint) {
+  const v = hint.visual;
+  if (!v) return hint.text;
+  if (v.type === "in_either") return "Quái vật nằm trong địa hình A hoặc B.";
+  if (v.type === "distance") {
+    const kind = v.subjects[0]?.kind;
+    if (kind === "terrain")        return `Quái vật nằm trong vòng ${v.dist} ô tính từ địa hình A.`;
+    if (kind === "any_animal")     return `Quái vật nằm trong vòng ${v.dist} ô tính từ động vật bất kỳ.`;
+    if (kind === "animal")         return `Quái vật nằm trong vòng ${v.dist} ô tính từ động vật A.`;
+    if (kind === "structure_type") return `Quái vật nằm trong vòng ${v.dist} ô tính từ công trình A bất kỳ.`;
+    if (kind === "structure_color") return `Quái vật nằm trong vòng ${v.dist} ô tính từ công trình màu X bất kỳ.`;
+  }
+  return hint.text;
+}
+
+function renderMessage(text, playerColors) {
+  return text.split(/(P\d+)/g).map((part, i) => {
+    const m = part.match(/^P(\d+)$/);
+    if (m) {
+      const player = Number(m[1]);
+      return <span key={i} className="messageDot" style={{ "--player-color": playerColors[player] }} aria-label={part} />;
+    }
+    return part;
+  });
+}
+
+function randomRoomCode() {
+  return String(Math.floor(Math.random() * 10 ** ROOM_CODE_LENGTH)).padStart(ROOM_CODE_LENGTH, "0");
+}
+
+function roomPeerId(code) {
+  return `cryptid4-room-${code}`;
+}
+
+function NetworkStatusBar({ roomCode, status, playerCount, maxPlayers }) {
+  return (
+    <p className="networkStatus networkStatusBar">
+      <span>
+        Phòng <b>{roomCode || "----"}</b>
+      </span>
+      <span className="networkStatusDivider" aria-hidden="true">•</span>
+      <span>{status || "Phòng online"}</span>
+      <span className="networkStatusDivider" aria-hidden="true">•</span>
+      <span>{playerCount}/{maxPlayers} người chơi</span>
+    </p>
+  );
+}
 
 function App() {
   const [scenarioData, setScenarioData] = useState(null);
   const [screen, setScreen] = useState("lobby");
   const [playMode, setPlayMode] = useState("solo");
   const [botDifficulty, setBotDifficulty] = useState(DEFAULT_BOT_DIFFICULTY);
-  const [competitivePlayerCount, setCompetitivePlayerCount] = useState(3);
+  const [competitivePlayerCount, setCompetitivePlayerCount] = useState(2);
   const [roomCode, setRoomCode] = useState("");
   const [networkStatus, setNetworkStatus] = useState("Tạo hoặc tham gia phòng online.");
   const [networkRole, setNetworkRole] = useState(null);
   const [localPlayer, setLocalPlayer] = useState(1);
   const [roomPlayers, setRoomPlayers] = useState([]);
-  const remoteUpdateRef = useRef(false);
-  const syncTimerRef = useRef(null);
   const peerRoomRef = useRef(null);
+  const latestSnapshotRef = useRef(null);
+  const processActionRef = useRef(null);
+  const pendingSnapshotSelectedCellIdRef = useRef(null);
+  const lastGameStartOverlayKeyRef = useRef(null);
   const lastAutoBotKeyRef = useRef(null);
   const [scenarioIndex, setScenarioIndex] = useState(0);
   const [hintDealSeed, setHintDealSeed] = useState(() => Math.floor(Math.random() * 0xffffffff));
@@ -36,6 +167,7 @@ function App() {
   const [markDropDelays, setMarkDropDelays] = useState({});
   const [message, setMessage] = useState("Chọn một ô, rồi Hỏi hoặc Đoán.");
   const [currentTurn, setCurrentTurn] = useState(1);
+  const [turnOrder, setTurnOrder] = useState([1, 2, 3]);
   const [turnNumber, setTurnNumber] = useState(1);
   const [pendingPenalty, setPendingPenalty] = useState(null);
   const [pendingAnswer, setPendingAnswer] = useState(null);
@@ -46,7 +178,10 @@ function App() {
   const [gameOver, setGameOver] = useState(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [gameStartInfo, setGameStartInfo] = useState(null);
+  const [hiddenPlayers, setHiddenPlayers] = useState(new Set());
+  const [playerColors, setPlayerColors] = useState(PLAYER_COLORS);
 
   function playSound(effect) {
     playSoundEffect(effect, soundEnabled);
@@ -56,13 +191,11 @@ function App() {
     const button = event.target.closest("button");
     if (!button || button.disabled) return;
     unlockAudio();
-    setAudioUnlocked(true);
     playSoundEffect("click", soundEnabled);
   }
 
   function toggleSoundEnabled() {
     unlockAudio();
-    setAudioUnlocked(true);
     playSoundEffect("toggle", true);
     setSoundEnabled((current) => !current);
   }
@@ -76,16 +209,6 @@ function App() {
         if (count > 1) setScenarioIndex(Math.floor(Math.random() * count));
       });
   }, []);
-
-  useEffect(() => {
-    if (!audioUnlocked) {
-      stopBackgroundMusic();
-      return () => {};
-    }
-    const track = screen === "lobby" ? "lobby" : "board";
-    startBackgroundMusic(track, soundEnabled);
-    return () => stopBackgroundMusic();
-  }, [audioUnlocked, screen, soundEnabled]);
 
   const scenario = scenarioData?.scenarios?.[scenarioIndex];
   const playerCount = playMode === "duel" ? Math.max(competitivePlayerCount, 3) : (scenario?.playerCount ?? scenario?.hints?.length ?? 3);
@@ -116,6 +239,7 @@ function App() {
       player: index + 1,
       id: hint.id,
       text: hint.text,
+      visual: hint.visual,
     }))
   ), [dealHints, hintDealSeed, playerCount]);
   const hintsByPlayer = useMemo(() => {
@@ -160,17 +284,45 @@ function App() {
   const monsterCellId = useMemo(() => {
     return puzzle?.monsterCell?.id ?? resolveMonsterCellId(puzzle, scenario);
   }, [puzzle, scenario]);
+  const catalogHints = useMemo(() => {
+    const seen = new Set();
+    return positiveHintPool.filter((hint) => {
+      const key = hint.visual?.type === "distance"
+        ? `distance_${hint.visual.subjects[0]?.kind}`
+        : (hint.visual?.type ?? "unknown");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [positiveHintPool]);
   const humanPlayer = playMode === "duel" ? localPlayer : 1;
   const botPlayers = playMode === "duel" ? (competitivePlayerCount === 2 ? [3] : []) : [2, 3];
   const humanPlayers = playMode === "duel" ? playerIdsForCount(competitivePlayerCount) : [1];
   const isDuelHost = playMode === "duel" && networkRole === "host";
   const activeBotConfig = BOT_DIFFICULTIES[botDifficulty] ?? BOT_DIFFICULTIES[DEFAULT_BOT_DIFFICULTY];
-  const turnOrder = playMode === "duel" ? playerIdsForCount(playerCount) : [1, 2, 3];
   const isHumanTurn = currentTurn === humanPlayer;
-  const currentTurnKind = botPlayers.includes(currentTurn) ? "Bot" : "Human";
-  const turnStatusText = currentTurn === humanPlayer
-    ? "Lượt bạn"
-    : `Lượt P${currentTurn} (${currentTurnKind === "Bot" ? "Bot" : "Người chơi"})`;
+  const visibleMessage = pendingPenalty && pendingPenalty.player !== humanPlayer
+    ? "Đang chờ người chơi khác đặt X phạt."
+    : message;
+
+  function maybeShowGameStartOverlay(snapshot, playerId = humanPlayer) {
+    if (!snapshot) return;
+    const isFreshGame = (snapshot.turnNumber ?? 1) === 1
+      && !Object.keys(snapshot.marks ?? {}).length
+      && !snapshot.pendingPenalty
+      && !snapshot.pendingAnswer
+      && !snapshot.gameOver;
+    if (!isFreshGame) return;
+
+    const key = `${snapshot.scenarioIndex ?? 0}:${snapshot.hintDealSeed ?? 0}:${(snapshot.turnOrder ?? []).join("-")}:${playerId}`;
+    if (lastGameStartOverlayKeyRef.current === key) return;
+    lastGameStartOverlayKeyRef.current = key;
+    setGameStartInfo({
+      humanPlayer: playerId,
+      playerColors: snapshot.playerColors ?? playerColors,
+      turnOrder: snapshot.turnOrder ?? turnOrder,
+    });
+  }
 
   function nextTurnAfter(player) {
     const index = turnOrder.indexOf(player);
@@ -180,6 +332,29 @@ function App() {
   function nextTurnNumber() {
     return turnNumber + 1;
   }
+
+  useEffect(() => {
+    setHiddenPlayers(new Set());
+  }, [marks]);
+
+  useEffect(() => {
+    if (pendingAnswer?.target === humanPlayer) {
+      playSound("asked");
+      const cell = cellsById.get(pendingAnswer.cellId);
+      if (cell) setSelectedCell(cell);
+    }
+  }, [pendingAnswer]);
+
+  useEffect(() => {
+    const cellId = pendingSnapshotSelectedCellIdRef.current;
+    if (!cellId) return;
+
+    const cell = cellsById.get(cellId);
+    if (!cell) return;
+
+    pendingSnapshotSelectedCellIdRef.current = null;
+    setSelectedCell(cell);
+  }, [cellsById]);
 
   useEffect(() => {
     setPredictedHints((current) => {
@@ -199,9 +374,11 @@ function App() {
       roomMaxPlayers: competitivePlayerCount,
       playerCount,
       hintDealSeed,
+      playerColors,
       marks,
       message,
       currentTurn,
+      turnOrder,
       turnNumber,
       pendingPenalty,
       pendingAnswer,
@@ -213,9 +390,16 @@ function App() {
     };
   }
 
+  latestSnapshotRef.current = gameSnapshot();
+  processActionRef.current = processAction;
+
   function applyGameSnapshot(snapshot) {
     if (!snapshot) return;
-    remoteUpdateRef.current = true;
+    const resolvedSelectedCell = snapshot.selectedCellId ? cellsById.get(snapshot.selectedCellId) ?? null : null;
+    const snapshotSelectedCell = resolvedSelectedCell ?? (snapshot.selectedCellId ? { id: snapshot.selectedCellId } : null);
+    pendingSnapshotSelectedCellIdRef.current = snapshot.selectedCellId && !resolvedSelectedCell
+      ? snapshot.selectedCellId
+      : null;
     setScenarioIndex(snapshot.scenarioIndex ?? 0);
     setCompetitivePlayerCount(Math.min(Math.max(Number(snapshot.roomMaxPlayers ?? snapshot.playerCount ?? 3), 2), 5));
     setHintDealSeed(snapshot.hintDealSeed ?? 0);
@@ -223,130 +407,328 @@ function App() {
     setMarkDropDelays({});
     setMessage(snapshot.message ?? "Chọn một ô, rồi Hỏi hoặc Đoán.");
     setCurrentTurn(snapshot.currentTurn ?? 1);
+    setTurnOrder(snapshot.turnOrder ?? [1, 2, 3]);
     setTurnNumber(snapshot.turnNumber ?? 1);
     setPendingPenalty(snapshot.pendingPenalty ?? null);
     setPendingAnswer(snapshot.pendingAnswer ?? null);
     setQuestionMarks(snapshot.questionMarks ?? {});
     setRevealMonster(Boolean(snapshot.revealMonster));
     setGameOver(snapshot.gameOver ?? null);
-    setActionStep("choose");
-    setSelectedCell(snapshot.selectedCellId ? cellsById.get(snapshot.selectedCellId) ?? null : null);
-    window.setTimeout(() => {
-      remoteUpdateRef.current = false;
-    }, 0);
+    setSelectedCell(snapshotSelectedCell);
+    if (snapshot.playerColors) setPlayerColors(snapshot.playerColors);
+    setActionStep((prev) => (
+      prev === "askTarget"
+      && snapshotSelectedCell
+      && (snapshot.currentTurn ?? 1) === humanPlayer
+      && !snapshot.pendingPenalty
+      && !snapshot.pendingAnswer
+        ? "askTarget"
+        : "choose"
+    ));
   }
 
-  function syncRoomState(snapshot = {}) {
-    if (playMode !== "duel" || !roomCode || remoteUpdateRef.current) return;
-    const nextSnapshot = gameSnapshot(snapshot);
-    window.clearTimeout(syncTimerRef.current);
-    syncTimerRef.current = window.setTimeout(() => {
-      peerRoomRef.current?.sendState(nextSnapshot);
-    }, 80);
+  function sendAction(kind, payload) {
+    if (playMode !== "duel") return;
+    if (isDuelHost) {
+      processAction(kind, payload, localPlayer);
+    } else {
+      peerRoomRef.current?.sendAction(kind, payload);
+    }
   }
 
-  useEffect(() => {
-    syncRoomState();
-  }, [scenarioIndex, competitivePlayerCount, hintDealSeed, currentTurn, turnNumber, pendingPenalty, pendingAnswer, questionMarks, revealMonster, gameOver]);
+  function processAction(kind, payload, fromPlayer) {
+    if (!puzzle || gameOver) return;
+
+    function applyAndBroadcast(snapshot) {
+      applyGameSnapshot(snapshot);
+      setActionStep("choose");
+      if (isDuelHost) peerRoomRef.current?.broadcastState(snapshot);
+    }
+
+    if (kind === "ask") {
+      const { targetPlayer, cellId } = payload;
+      const cell = cellsById.get(cellId);
+      if (!cell || cellHasXInMarks(marks, cellId)) return;
+      if (currentTurn !== fromPlayer || pendingPenalty || pendingAnswer) return;
+      playSound("ask");
+
+      if (botPlayers.includes(targetPlayer)) {
+        const correct = selectedHintResult(targetPlayer, cell);
+        const answerMark = correct ? "O" : "X";
+        let nextMarks = setCellMark(marks, cellId, targetPlayer, answerMark);
+        let nextQuestionMarks = questionMarksWithoutCells(questionMarks, [cellId]);
+        let nextTurn = currentTurn;
+        let nextNumber = turnNumber;
+        let nextPendingPenalty = null;
+        let nextMessage = `P${targetPlayer}: đã đặt ${answerMark}`;
+        if (correct) {
+          nextTurn = nextTurnAfter(fromPlayer);
+          nextNumber = turnNumber + 1;
+        } else if (botPlayers.includes(fromPlayer)) {
+          const penalty = computePenaltyX(fromPlayer, nextMarks, puzzle, selectedHintResult);
+          nextMarks = penalty.marks;
+          if (penalty.cellId) nextQuestionMarks = questionMarksWithoutCells(nextQuestionMarks, [penalty.cellId]);
+          nextTurn = nextTurnAfter(fromPlayer);
+          nextNumber = turnNumber + 1;
+          nextMessage += `. ${penalty.messagePart}`;
+        } else {
+          nextPendingPenalty = { player: fromPlayer };
+          nextMessage = `P${targetPlayer}: đã đặt X. P${fromPlayer}: Hãy đặt X phạt.`;
+        }
+        setMarkDropSequence([{ cellId, player: targetPlayer }]);
+        applyAndBroadcast(gameSnapshot({
+          marks: nextMarks, questionMarks: nextQuestionMarks,
+          currentTurn: nextTurn, turnNumber: nextNumber,
+          pendingAnswer: null, pendingPenalty: nextPendingPenalty,
+          message: nextMessage, selectedCellId: cellId,
+        }));
+        return;
+      }
+
+      const nextPendingAnswer = { asker: fromPlayer, target: targetPlayer, cellId };
+      const nextMessage = `P${targetPlayer}: trả lời câu hỏi của P${fromPlayer}.`;
+      applyAndBroadcast(gameSnapshot({
+        pendingAnswer: nextPendingAnswer, message: nextMessage, selectedCellId: cellId,
+      }));
+      return;
+    }
+
+    if (kind === "answer") {
+      if (!pendingAnswer || pendingAnswer.target !== fromPlayer) return;
+      const cell = cellsById.get(pendingAnswer.cellId);
+      if (!cell) return;
+      const { asker, target } = pendingAnswer;
+      const correct = selectedHintResult(target, cell);
+      const answerMark = correct ? "O" : "X";
+      let nextMarks = setCellMark(marks, cell.id, target, answerMark);
+      let nextQuestionMarks = questionMarksWithoutCells(questionMarks, [cell.id]);
+      let nextPendingPenalty = null;
+      let nextTurn = currentTurn;
+      let nextNumber = turnNumber + 1;
+      let nextMessage = `P${target}: đã đặt ${answerMark}`;
+      const markSequence = [{ cellId: cell.id, player: target }];
+
+      if (correct) {
+        nextTurn = nextTurnAfter(asker);
+      } else if (botPlayers.includes(asker)) {
+        const penalty = computePenaltyX(asker, nextMarks, puzzle, selectedHintResult);
+        nextMarks = penalty.marks;
+        if (penalty.cellId) {
+          nextQuestionMarks = questionMarksWithoutCells(nextQuestionMarks, [penalty.cellId]);
+          markSequence.push({ cellId: penalty.cellId, player: asker });
+        }
+        nextTurn = nextTurnAfter(asker);
+        nextMessage += `. ${penalty.messagePart}`;
+      } else {
+        nextPendingPenalty = { player: asker };
+        nextMessage = `P${target}: đã đặt X. P${asker}: Hãy đặt X phạt.`;
+        nextTurn = currentTurn;
+        nextNumber = turnNumber;
+      }
+
+      setMarkDropSequence(markSequence);
+      applyAndBroadcast(gameSnapshot({
+        marks: nextMarks, questionMarks: nextQuestionMarks,
+        currentTurn: nextTurn, turnNumber: nextNumber,
+        pendingAnswer: null, pendingPenalty: nextPendingPenalty,
+        message: nextMessage, selectedCellId: cell.id,
+      }));
+      return;
+    }
+
+    if (kind === "guess") {
+      const { cellId } = payload;
+      const cell = cellsById.get(cellId);
+      if (!cell || cellHasXInMarks(marks, cellId)) return;
+      if (currentTurn !== fromPlayer || pendingPenalty) return;
+      if (!selectedHintResult(fromPlayer, cell)) return;
+      playSound("guess");
+
+      let nextMarks = setCellMark(marks, cell.id, fromPlayer, "O");
+      let failedPlayer = null;
+      const markSequence = [{ cellId: cell.id, player: fromPlayer }];
+
+      for (const player of turnOrder.filter((p) => p !== fromPlayer)) {
+        if (selectedHintResult(player, cell)) {
+          nextMarks = setCellMark(nextMarks, cell.id, player, "O");
+          markSequence.push({ cellId: cell.id, player });
+        } else {
+          nextMarks = setCellMark(nextMarks, cell.id, player, "X");
+          markSequence.push({ cellId: cell.id, player });
+          failedPlayer = player;
+          break;
+        }
+      }
+
+      const nextQuestionMarks = questionMarksWithoutCells(questionMarks, [cell.id]);
+      setMarkDropSequence(markSequence);
+
+      if (failedPlayer) {
+        const nextPendingPenalty = { player: fromPlayer };
+        const nextMessage = `P${failedPlayer}: đã đặt X. P${fromPlayer}: Hãy đặt X phạt.`;
+        applyAndBroadcast(gameSnapshot({
+          marks: nextMarks, questionMarks: nextQuestionMarks,
+          pendingPenalty: nextPendingPenalty, message: nextMessage,
+          selectedCellId: cell.id,
+        }));
+        return;
+      }
+
+      let nextGameOver = null;
+      let nextRevealMonster = revealMonster;
+      let nextMessage = "";
+      if (cell.id === monsterCellId) {
+        nextGameOver = { title: `P${fromPlayer} thắng!`, body: "Đúng vị trí quái vật.", winner: fromPlayer };
+        nextMessage = `P${fromPlayer} thắng!`;
+        nextRevealMonster = true;
+        playSound("success");
+      } else {
+        nextGameOver = { title: `P${fromPlayer} đoán sai`, body: "Tất cả gợi ý đều khớp, nhưng đây không phải vị trí quái vật.", winner: null };
+        nextMessage = `P${fromPlayer} đoán sai. Tất cả gợi ý đều khớp, nhưng đây không phải vị trí quái vật.`;
+        playSound("fail");
+      }
+      applyAndBroadcast(gameSnapshot({
+        marks: nextMarks, questionMarks: nextQuestionMarks,
+        gameOver: nextGameOver, message: nextMessage,
+        revealMonster: nextRevealMonster, selectedCellId: cell.id,
+      }));
+      return;
+    }
+
+    if (kind === "penalty") {
+      if (!pendingPenalty || pendingPenalty.player !== fromPlayer) return;
+      const { cellId } = payload;
+      const cell = cellsById.get(cellId);
+      if (!cell || cellHasXInMarks(marks, cellId)) return;
+      if (selectedHintResult(fromPlayer, cell)) return;
+      playSound("mark");
+
+      const nextMarks = setCellMark(marks, cell.id, fromPlayer, "X");
+      const nextQuestionMarks = questionMarksWithoutCells(questionMarks, [cell.id]);
+      const nextTurn = nextTurnAfter(fromPlayer);
+      const nextNumber = turnNumber + 1;
+      const nextMessage = `P${fromPlayer}: đã đặt X`;
+      setMarkDropSequence([{ cellId: cell.id, player: fromPlayer }]);
+      applyAndBroadcast(gameSnapshot({
+        marks: nextMarks, questionMarks: nextQuestionMarks,
+        pendingPenalty: null, currentTurn: nextTurn, turnNumber: nextNumber,
+        message: nextMessage, selectedCellId: cell.id,
+      }));
+      return;
+    }
+  }
 
   async function createDuelRoom() {
     playSound("start");
-    setNetworkStatus("Đang tạo kết nối P2P...");
-    const nextIndex = scenarioData?.scenarios?.length ? Math.floor(Math.random() * scenarioData.scenarios.length) : 0;
-    const seed = Math.floor(Math.random() * 0xffffffff);
-    const initialState = {
-      scenarioIndex: nextIndex,
-      roomMaxPlayers: competitivePlayerCount,
-      playerCount: Math.max(competitivePlayerCount, 3),
-      hintDealSeed: seed,
-      marks: {},
-      message: `Phòng đã sẵn sàng. Đang chờ ${competitivePlayerCount} người chơi.`,
-      currentTurn: 1,
-      turnNumber: 1,
-      pendingPenalty: null,
-      questionMarks: {},
-      revealMonster: false,
-      gameOver: null,
-      selectedCellId: null,
-    };
-    peerRoomRef.current?.close();
-    const peerRoom = await createPeerRoom({
-      role: "host",
-      playerId: 1,
-      maxPlayers: competitivePlayerCount,
-      onState: (state) => applyGameSnapshot(state),
-      onRoom: (players) => {
-        setRoomPlayers(players);
-        setNetworkStatus(`Phòng online · ${players.length}/${competitivePlayerCount} người chơi`);
-      },
-      onStatus: setNetworkStatus,
-    });
-    peerRoomRef.current = peerRoom;
-    const response = await fetch("/api/rooms", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ maxPlayers: competitivePlayerCount, hostPeerId: peerRoom.peerId, state: initialState }),
-    });
-    const room = await response.json();
-    setPlayMode("duel");
-    setNetworkRole("host");
-    setLocalPlayer(room.playerId);
-    setRoomCode(room.code);
-    setRoomPlayers(room.players ?? []);
-    applyGameSnapshot(room.state);
-    setScreen("game");
-    setCompetitivePlayerCount(room.maxPlayers ?? room.state?.roomMaxPlayers ?? competitivePlayerCount);
-    setNetworkStatus(`Đã tạo phòng ${room.code}. Chia sẻ mã phòng để chơi online.`);
+    const newColors = generatePlayerColors();
+    setPlayerColors(newColors);
+    setNetworkStatus("Đang tạo phòng online...");
+    try {
+      const nextIndex = scenarioData?.scenarios?.length ? Math.floor(Math.random() * scenarioData.scenarios.length) : 0;
+      const seed = Math.floor(Math.random() * 0xffffffff);
+      const code = randomRoomCode();
+      const nextTurnOrder = shuffledItems(playerIdsForCount(Math.max(competitivePlayerCount, 3)), Math.floor(Math.random() * 0xffffffff));
+      const initialState = {
+        scenarioIndex: nextIndex,
+        roomMaxPlayers: competitivePlayerCount,
+        playerCount: Math.max(competitivePlayerCount, 3),
+        hintDealSeed: seed,
+        playerColors: newColors,
+        marks: {},
+        message: `Phòng đã sẵn sàng. Đang chờ ${competitivePlayerCount} người chơi.`,
+        currentTurn: nextTurnOrder[0],
+        turnOrder: nextTurnOrder,
+        turnNumber: 1,
+        pendingPenalty: null,
+        questionMarks: {},
+        revealMonster: false,
+        gameOver: null,
+        selectedCellId: null,
+      };
+      latestSnapshotRef.current = initialState;
+      peerRoomRef.current?.close();
+      const peerRoom = await createPeerRoom({
+        peerId: roomPeerId(code),
+        role: "host",
+        playerId: 1,
+        maxPlayers: competitivePlayerCount,
+        getState: () => latestSnapshotRef.current ?? initialState,
+        onAction: (kind, payload, fromPlayer) => {
+          processActionRef.current?.(kind, payload, fromPlayer);
+        },
+        onRoom: (players) => {
+          setRoomPlayers(players);
+          setNetworkStatus("Phòng online");
+        },
+        onStatus: setNetworkStatus,
+      });
+      peerRoomRef.current = peerRoom;
+      setPlayMode("duel");
+      setNetworkRole("host");
+      setLocalPlayer(1);
+      setRoomCode(code);
+      setRoomPlayers([1]);
+      applyGameSnapshot(initialState);
+      setScreen("game");
+      maybeShowGameStartOverlay(initialState, 1);
+      setCompetitivePlayerCount(competitivePlayerCount);
+      setNetworkStatus("Phòng online");
+    } catch (error) {
+      console.error(error);
+      peerRoomRef.current?.close();
+      peerRoomRef.current = null;
+      playSound("denied");
+      setNetworkStatus("Không tạo được phòng online. Thử tạo lại hoặc kiểm tra mạng.");
+    }
   }
 
   async function joinDuelRoom() {
     playSound("start");
+    setPlayerColors(generatePlayerColors());
     const code = roomCode.trim();
     if (!code) {
       playSound("denied");
       setNetworkStatus("Nhập mã phòng trước.");
       return;
     }
-    setNetworkStatus("Đang vào phòng P2P...");
-    const response = await fetch(`/api/rooms/${code}/join`, { method: "POST" });
-    if (!response.ok) {
+    setNetworkStatus("Đang vào phòng online...");
+    try {
+      peerRoomRef.current?.close();
+      const peerRoom = await createPeerRoom({
+        role: "guest",
+        hostPeerId: roomPeerId(code),
+        playerId: null,
+        maxPlayers: 3,
+        onState: (state, assignedPlayerId) => {
+          applyGameSnapshot(state);
+          maybeShowGameStartOverlay(state, Number(assignedPlayerId ?? peerRoomRef.current?.playerId ?? 1));
+        },
+        onRoom: (players) => {
+          setRoomPlayers(players);
+          setNetworkStatus("Phòng online");
+        },
+        onStatus: setNetworkStatus,
+      });
+      peerRoomRef.current = peerRoom;
+      setPlayMode("duel");
+      setNetworkRole("guest");
+      setLocalPlayer(peerRoom.playerId ?? 1);
+      setRoomCode(code);
+      setScreen("game");
+      setNetworkStatus("Phòng online");
+    } catch (error) {
+      console.error(error);
+      peerRoomRef.current?.close();
+      peerRoomRef.current = null;
       playSound("denied");
-      setNetworkStatus("Không thể vào phòng này.");
-      return;
+      setNetworkStatus("Không vào được phòng online. Kiểm tra server, mạng, hoặc mã phòng.");
     }
-    const room = await response.json();
-    if (!room.hostPeerId) {
-      playSound("denied");
-      setNetworkStatus("Phòng này chưa có host P2P.");
-      return;
-    }
-    peerRoomRef.current?.close();
-    const peerRoom = await createPeerRoom({
-      role: "guest",
-      hostPeerId: room.hostPeerId,
-      playerId: room.playerId,
-      maxPlayers: room.maxPlayers ?? 3,
-      onState: (state) => applyGameSnapshot(state),
-      onRoom: (players) => {
-        setRoomPlayers(players);
-        setNetworkStatus(`Phòng ${room.code} · ${players.length}/${room.maxPlayers ?? 3} người chơi`);
-      },
-      onStatus: setNetworkStatus,
-    });
-    peerRoomRef.current = peerRoom;
-    setPlayMode("duel");
-    setNetworkRole("guest");
-    setLocalPlayer(room.playerId);
-    setRoomCode(room.code);
-    setRoomPlayers(room.players ?? []);
-    setCompetitivePlayerCount(room.maxPlayers ?? room.state?.roomMaxPlayers ?? 3);
-    applyGameSnapshot(room.state);
-    setScreen("game");
-    setNetworkStatus(`Đã vào phòng ${room.code} với vai trò P${room.playerId}.`);
   }
 
   function startSolo() {
     playSound("start");
+    const newColors = generatePlayerColors();
+    setPlayerColors(newColors);
     peerRoomRef.current?.close();
     peerRoomRef.current = null;
     setPlayMode("solo");
@@ -354,7 +736,8 @@ function App() {
     setLocalPlayer(1);
     setRoomCode("");
     setRoomPlayers([]);
-    resetForScenario(scenarioIndex, { skipSync: true, message: "P1: chọn một ô" });
+    const { nextTurnOrder } = resetForScenario(scenarioIndex, { skipSync: true });
+    setGameStartInfo({ humanPlayer: 1, playerColors: newColors, turnOrder: nextTurnOrder });
     setScreen("game");
   }
 
@@ -373,15 +756,19 @@ function App() {
 
   function resetForScenario(nextIndex, overrides = {}) {
     const nextSeed = overrides.hintDealSeed ?? Math.floor(Math.random() * 0xffffffff);
-    const nextMessage = overrides.message ?? `P${humanPlayer}: chọn một ô`;
+    const playerIds = playMode === "duel" ? playerIdsForCount(Math.max(competitivePlayerCount, 3)) : [1, 2, 3];
+    const nextTurnOrder = shuffledItems(playerIds, Math.floor(Math.random() * 0xffffffff));
+    const nextCurrentTurn = nextTurnOrder[0];
+    const nextMessage = overrides.message ?? `P${nextCurrentTurn}: chọn một ô`;
     setScenarioIndex(nextIndex);
     setHintDealSeed(nextSeed);
+    setTurnOrder(nextTurnOrder);
     setSelectedCell(null);
     setActionStep("choose");
     setMarks({});
     setMarkDropDelays({});
     setMessage(nextMessage);
-    setCurrentTurn(1);
+    setCurrentTurn(nextCurrentTurn);
     setTurnNumber(1);
     lastAutoBotKeyRef.current = null;
     setPendingPenalty(null);
@@ -392,14 +779,15 @@ function App() {
     setQuestionMarks({});
     setRevealMonster(false);
 
-    if (!overrides.skipSync) {
-      syncRoomState({
+    if (!overrides.skipSync && isDuelHost) {
+      peerRoomRef.current?.broadcastState(gameSnapshot({
         scenarioIndex: nextIndex,
         playerCount,
         hintDealSeed: nextSeed,
         marks: {},
         message: nextMessage,
-        currentTurn: 1,
+        currentTurn: nextCurrentTurn,
+        turnOrder: nextTurnOrder,
         turnNumber: 1,
         pendingPenalty: null,
         pendingAnswer: null,
@@ -407,8 +795,9 @@ function App() {
         revealMonster: false,
         gameOver: null,
         selectedCellId: null,
-      });
+      }));
     }
+    return { nextTurnOrder };
   }
 
   function setMarkDropSequence(entries) {
@@ -435,7 +824,7 @@ function App() {
       nextTurn = nextTurnAfter(asker);
       nextNumber = nextTurnNumber();
     } else if (botPlayers.includes(asker)) {
-      const penalty = setBotPenaltyX(nextMarks, asker);
+      const penalty = computePenaltyX(asker, nextMarks, puzzle, selectedHintResult);
       nextMarks = penalty.marks;
       if (penalty.cellId) {
         nextQuestionMarks = questionMarksWithoutCells(nextQuestionMarks, [penalty.cellId]);
@@ -446,7 +835,7 @@ function App() {
       nextMessage = `P${target}: đã đặt X. ${penalty.messagePart}`;
     } else {
       nextPendingPenalty = { player: asker };
-      nextMessage = `P${target}: đã đặt X.`;
+      nextMessage = `P${target}: đã đặt X. P${asker}: Hãy đặt X phạt.`;
     }
 
     setMarkDropSequence(markSequence);
@@ -458,16 +847,6 @@ function App() {
     setTurnNumber(nextNumber);
     setActionStep("choose");
     setMessage(nextMessage);
-    syncRoomState({
-      marks: nextMarks,
-      questionMarks: nextQuestionMarks,
-      pendingAnswer: null,
-      pendingPenalty: nextPendingPenalty,
-      currentTurn: nextTurn,
-      turnNumber: nextNumber,
-      message: nextMessage,
-      selectedCellId: cell.id,
-    });
   }
 
   function answerPendingQuestion(value) {
@@ -477,6 +856,10 @@ function App() {
     const correctMark = selectedHintResult(pendingAnswer.target, cell) ? "O" : "X";
     if (value !== correctMark) {
       playSound("denied");
+      return;
+    }
+    if (playMode === "duel") {
+      sendAction("answer", {});
       return;
     }
     resolveAskAnswer({ asker: pendingAnswer.asker, target: pendingAnswer.target, cell });
@@ -489,7 +872,8 @@ function App() {
     const nextIndex = scenarioCount === 1
       ? 0
       : randomItem(Array.from({ length: scenarioCount }, (_, index) => index).filter((index) => index !== scenarioIndex));
-    resetForScenario(nextIndex);
+    const { nextTurnOrder } = resetForScenario(nextIndex);
+    setGameStartInfo({ humanPlayer, playerColors, turnOrder: nextTurnOrder });
   }
 
   function cellHasXInMarks(markState, cellId) {
@@ -574,7 +958,6 @@ function App() {
       : `P${humanPlayer} đánh dấu ? là ô có thể có quái vật.`;
     setQuestionMarks(nextQuestionMarks);
     setMessage(nextMessage);
-    syncRoomState({ questionMarks: nextQuestionMarks, message: nextMessage });
   }
 
   function selectedHintResult(player, cell) {
@@ -582,21 +965,6 @@ function App() {
     return hintsByPlayer[player]?.check(cell, puzzle.map) ?? false;
   }
 
-  function randomPenaltyCell(player, markState = marks) {
-    const candidates = puzzle.map.cells.filter((cell) => !cellHasXInMarks(markState, cell.id) && !selectedHintResult(player, cell));
-    return randomItem(candidates);
-  }
-
-  function setBotPenaltyX(nextMarks, player) {
-    const penaltyCell = randomPenaltyCell(player, nextMarks);
-    if (!penaltyCell) return { marks: nextMarks, messagePart: "Không tìm thấy ô phạt hợp lệ.", cellId: null };
-
-    return {
-      marks: setCellMark(nextMarks, penaltyCell.id, player, "X"),
-      messagePart: `P${player} đặt X phạt ở ${penaltyCell.id}.`,
-      cellId: penaltyCell.id,
-    };
-  }
 
   function placePenaltyX(cell) {
     if (!pendingPenalty) return;
@@ -616,6 +984,13 @@ function App() {
       setMessage(`P${pendingPenalty.player}: X phải nằm trên ô KHÔNG khớp gợi ý của bạn.`);
       return;
     }
+
+    if (playMode === "duel") {
+      setSelectedCell(cell);
+      sendAction("penalty", { cellId: cell.id });
+      return;
+    }
+
     playSound("mark");
     const nextMarks = setCellMark(marks, cell.id, pendingPenalty.player, "X");
     const nextQuestionMarks = questionMarksWithoutCells(questionMarks, [cell.id]);
@@ -627,18 +1002,9 @@ function App() {
     setPendingPenalty(null);
     setCurrentTurn(nextTurn);
     setTurnNumber(nextNumber);
-    setSelectedCell(null);
+    setSelectedCell(cell);
     setActionStep("choose");
     setMessage(nextMessage);
-    syncRoomState({
-      marks: nextMarks,
-      questionMarks: nextQuestionMarks,
-      currentTurn: nextTurn,
-      turnNumber: nextNumber,
-      pendingPenalty: null,
-      message: nextMessage,
-      selectedCellId: null,
-    });
   }
 
   function ask(targetPlayer) {
@@ -664,8 +1030,13 @@ function App() {
       setMessage("Không thể hỏi hoặc đoán ô đã có X.");
       return;
     }
-    playSound("ask");
 
+    if (playMode === "duel") {
+      sendAction("ask", { targetPlayer, cellId: selectedCell.id });
+      return;
+    }
+
+    playSound("ask");
     if (botPlayers.includes(targetPlayer)) {
       resolveAskAnswer({ asker: actor, target: targetPlayer, cell: selectedCell });
       return;
@@ -676,11 +1047,6 @@ function App() {
     setPendingAnswer(nextPendingAnswer);
     setActionStep(targetPlayer === humanPlayer ? "answer" : "choose");
     setMessage(nextMessage);
-    syncRoomState({
-      pendingAnswer: nextPendingAnswer,
-      message: nextMessage,
-      selectedCellId: selectedCell.id,
-    });
   }
 
   function guess() {
@@ -706,6 +1072,12 @@ function App() {
       setMessage("Không thể đoán ô không khớp gợi ý của bạn.");
       return;
     }
+
+    if (playMode === "duel") {
+      sendAction("guess", { cellId: selectedCell.id });
+      return;
+    }
+
     playSound("guess");
 
     let nextMarks = setCellMark(marks, selectedCell.id, actor, "O");
@@ -727,57 +1099,34 @@ function App() {
 
     if (failedPlayer) {
       const nextPendingPenalty = { player: actor };
-      const nextMessage = `P${failedPlayer}: đã đặt X.`;
+      const nextMessage = `P${failedPlayer}: đã đặt X. P${actor}: Hãy đặt X phạt.`;
       setPendingPenalty(nextPendingPenalty);
       setMessage(nextMessage);
       setActionStep("choose");
-      syncRoomState({
-        marks: nextMarks,
-        questionMarks: nextQuestionMarks,
-        currentTurn,
-        turnNumber,
-        pendingPenalty: nextPendingPenalty,
-        message: nextMessage,
-      });
       return;
     }
 
     let nextGameOver = null;
     let nextMessage = "";
     if (selectedCell.id === monsterCellId) {
-      nextGameOver = { title: `P${actor} thắng!`, body: "Đúng vị trí quái vật." };
+      nextGameOver = { title: `P${actor} thắng!`, body: "Đúng vị trí quái vật.", winner: actor };
       nextMessage = `P${actor} thắng!`;
       playSound("success");
       setRevealMonster(true);
     } else {
-      nextGameOver = { title: `P${actor} đoán sai`, body: "Tất cả gợi ý đều khớp, nhưng đây không phải vị trí quái vật." };
+      nextGameOver = { title: `P${actor} đoán sai`, body: "Tất cả gợi ý đều khớp, nhưng đây không phải vị trí quái vật.", winner: null };
       nextMessage = `P${actor} đoán sai. Tất cả gợi ý đều khớp, nhưng đây không phải vị trí quái vật.`;
       playSound("fail");
     }
     setGameOver(nextGameOver);
     setMessage(nextMessage);
     setActionStep("choose");
-    syncRoomState({
-      marks: nextMarks,
-      questionMarks: nextQuestionMarks,
-      gameOver: nextGameOver,
-      message: nextMessage,
-      revealMonster: selectedCell.id === monsterCellId ? true : revealMonster,
-    });
   }
 
   function botAsk(player) {
     if (currentTurn !== player) return;
-    const targetPlayers = [1, 2, 3].filter((candidate) => candidate !== player);
-    const targetPlayer = randomItem(
-      Math.random() < activeBotConfig.askKnownBias
-        ? targetPlayers.filter((candidate) => humanPlayers.includes(candidate)).concat(targetPlayers)
-        : targetPlayers
-    );
-    const openCells = puzzle.map.cells.filter((cell) => !cellHasX(cell.id));
-    const informedCells = openCells.filter((cell) => selectedHintResult(player, cell));
-    const candidates = Math.random() < activeBotConfig.askKnownBias && informedCells.length ? informedCells : openCells;
-    const cell = randomItem(candidates);
+    const targetPlayer = selectAskTarget(player, activeBotConfig, humanPlayers, turnOrder);
+    const cell = selectAskCell(player, activeBotConfig, puzzle, cellHasX, selectedHintResult);
     if (!cell) {
       playSound("denied");
       setMessage(`Bot P${player} không còn ô hợp lệ để hỏi.`);
@@ -791,11 +1140,11 @@ function App() {
       setSelectedCell(cell);
       setActionStep(targetPlayer === humanPlayer ? "answer" : "choose");
       setMessage(nextMessage);
-      syncRoomState({
+      if (isDuelHost) peerRoomRef.current?.broadcastState(gameSnapshot({
         pendingAnswer: nextPendingAnswer,
         message: nextMessage,
         selectedCellId: cell.id,
-      });
+      }));
       return;
     }
 
@@ -808,7 +1157,7 @@ function App() {
     const nextNumber = nextTurnNumber();
 
     if (!correct) {
-      const penalty = setBotPenaltyX(nextMarks, player);
+      const penalty = computePenaltyX(player, nextMarks, puzzle, selectedHintResult);
       nextMarks = penalty.marks;
       suffix = ` ${penalty.messagePart}`;
       if (penalty.cellId) markedCellIds.push(penalty.cellId);
@@ -825,7 +1174,7 @@ function App() {
     setTurnNumber(nextNumber);
     setActionStep("choose");
     setMessage(nextMessage);
-    syncRoomState({
+    if (isDuelHost) peerRoomRef.current?.broadcastState(gameSnapshot({
       marks: nextMarks,
       questionMarks: nextQuestionMarks,
       currentTurn: nextTurn,
@@ -833,13 +1182,12 @@ function App() {
       message: nextMessage,
       selectedCellId: cell.id,
       pendingPenalty: null,
-    });
+    }));
   }
 
   function botGuess(player) {
     if (currentTurn !== player) return;
-    const candidates = puzzle.map.cells.filter((cell) => botCanConsiderGuessCell(player, cell));
-    const cell = randomItem(candidates);
+    const cell = selectGuessCell(player, puzzle, botCanConsiderGuessCell);
     if (!cell) {
       botAsk(player);
       return;
@@ -851,7 +1199,7 @@ function App() {
     const nextTurn = nextTurnAfter(player);
     const nextNumber = nextTurnNumber();
 
-    for (const targetPlayer of [1, 2, 3].filter((candidate) => candidate !== player)) {
+    for (const targetPlayer of turnOrder.filter((candidate) => candidate !== player)) {
       if (selectedHintResult(targetPlayer, cell)) {
         nextMarks = setCellMark(nextMarks, cell.id, targetPlayer, "O");
         markSequence.push({ cellId: cell.id, player: targetPlayer });
@@ -865,7 +1213,7 @@ function App() {
 
     const nextQuestionMarks = questionMarksWithoutCells(questionMarks, [cell.id]);
     if (failedPlayer) {
-      const penalty = setBotPenaltyX(nextMarks, player);
+      const penalty = computePenaltyX(player, nextMarks, puzzle, selectedHintResult);
       const finalQuestionMarks = penalty.cellId
         ? questionMarksWithoutCells(nextQuestionMarks, [penalty.cellId])
         : nextQuestionMarks;
@@ -881,7 +1229,7 @@ function App() {
       setTurnNumber(nextNumber);
       setActionStep("choose");
       setMessage(nextMessage);
-      syncRoomState({
+      if (isDuelHost) peerRoomRef.current?.broadcastState(gameSnapshot({
         marks: penalty.marks,
         questionMarks: finalQuestionMarks,
         currentTurn: nextTurn,
@@ -889,7 +1237,7 @@ function App() {
         message: nextMessage,
         selectedCellId: cell.id,
         pendingPenalty: null,
-      });
+      }));
       return;
     }
 
@@ -902,13 +1250,13 @@ function App() {
     setActionStep("choose");
 
     if (cell.id === monsterCellId) {
-      const nextGameOver = { title: `P${player} thắng!`, body: "Đúng vị trí quái vật." };
+      const nextGameOver = { title: `P${player} thắng!`, body: "Đúng vị trí quái vật.", winner: player };
       const nextMessage = `Bot P${player} thắng!`;
       playSound("success");
       setRevealMonster(true);
       setGameOver(nextGameOver);
       setMessage(nextMessage);
-      syncRoomState({
+      if (isDuelHost) peerRoomRef.current?.broadcastState(gameSnapshot({
         marks: nextMarks,
         questionMarks: nextQuestionMarks,
         currentTurn: nextTurn,
@@ -917,14 +1265,14 @@ function App() {
         message: nextMessage,
         revealMonster: true,
         selectedCellId: cell.id,
-      });
+      }));
     } else {
-      const nextGameOver = { title: `P${player} đoán sai`, body: "Tất cả gợi ý đều khớp, nhưng đây không phải vị trí quái vật." };
+      const nextGameOver = { title: `P${player} đoán sai`, body: "Tất cả gợi ý đều khớp, nhưng đây không phải vị trí quái vật.", winner: null };
       const nextMessage = `Bot P${player} đoán sai. Tất cả gợi ý đều khớp, nhưng đây không phải vị trí quái vật.`;
       playSound("fail");
       setGameOver(nextGameOver);
       setMessage(nextMessage);
-      syncRoomState({
+      if (isDuelHost) peerRoomRef.current?.broadcastState(gameSnapshot({
         marks: nextMarks,
         questionMarks: nextQuestionMarks,
         currentTurn: nextTurn,
@@ -932,15 +1280,14 @@ function App() {
         gameOver: nextGameOver,
         message: nextMessage,
         selectedCellId: cell.id,
-      });
+      }));
     }
   }
 
   function botTurn(player) {
     if (!puzzle || gameOver || currentTurn !== player) return;
     setPendingPenalty(null);
-    const canGuess = puzzle.map.cells.some((cell) => botCanConsiderGuessCell(player, cell));
-    const action = canGuess && Math.random() < activeBotConfig.guessChance ? "guess" : "ask";
+    const action = decideBotAction(player, activeBotConfig, puzzle, botCanConsiderGuessCell);
     if (action === "guess") {
       botGuess(player);
     } else {
@@ -975,29 +1322,82 @@ function App() {
     turnNumber,
     scenarioIndex,
     puzzle,
-    marks,
     pendingPenalty,
     pendingAnswer,
     gameOver,
     soundEnabled,
   ]);
 
+  useEffect(() => {
+    if (!gameStartInfo) return undefined;
+    const t = setTimeout(() => setGameStartInfo(null), 4000);
+    return () => clearTimeout(t);
+  }, [gameStartInfo]);
+
+  function togglePlayerVisibility(player) {
+    setHiddenPlayers((prev) => {
+      const next = new Set(prev);
+      if (next.has(player)) next.delete(player); else next.add(player);
+      return next;
+    });
+  }
+
+  function requestConfirm(label, onConfirm) {
+    if (gameOver) { setSettingsOpen(false); onConfirm(); }
+    else setConfirmAction({ label, onConfirm });
+  }
+
   const settingsOverlay = (
     <>
       {settingsOpen && (
-        <div className="settingsOverlay" role="dialog" aria-modal="true" aria-label="Cài đặt">
+        <div className="settingsOverlay" role="dialog" aria-modal="true" aria-label="Menu">
           <div className="settingsPanel">
             <div className="settingsHeader">
-              <h2>Cài đặt</h2>
+              {screen === "game" && puzzle && scenario && (
+                <p className="settingsGameInfo">
+                  {playMode === "duel"
+                    ? `Đối kháng ${roomCode} · Bạn là P${humanPlayer}`
+                    : `Chơi đơn · ${DIFFICULTY_LABELS[botDifficulty] ?? botDifficulty}`}
+                  {" · "}Màn {scenario.scenarioId} · Độ khó {puzzle.meta.difficulty.score}
+                </p>
+              )}
               <button
                 className="settingsClose"
                 type="button"
-                aria-label="Đóng cài đặt"
-                onClick={() => setSettingsOpen(false)}
+                aria-label="Đóng menu"
+                onClick={() => { setSettingsOpen(false); setConfirmAction(null); }}
               >
                 <span aria-hidden="true">×</span>
               </button>
             </div>
+            {screen === "game" && <div className="hintCatalog">
+              <h3 className="hintCatalogTitle">Danh sách gợi ý</h3>
+              <div className="hintCatalogList">
+                {catalogHints.map((hint) => (
+                  <div key={hint.id} className="hintCatalogRow">
+                    <HintVisual visual={hint.visual} text={hint.text} />
+                    <span className="hintCatalogText">{catalogHintText(hint)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>}
+            {screen === "game" && (
+              <div className="settingsActions">
+                <button
+                  className="ghostButton"
+                  onClick={() => requestConfirm("Về sảnh? Tiến trình ván đang chơi sẽ mất.", leaveToLobby)}
+                >
+                  Sảnh
+                </button>
+                <button
+                  className={`ghostButton ${gameOver ? "newGameReady" : ""}`}
+                  onClick={() => requestConfirm("Bắt đầu ván mới? Tiến trình hiện tại sẽ mất.", newGame)}
+                  disabled={playMode === "duel" && !isDuelHost}
+                >
+                  Ván mới
+                </button>
+              </div>
+            )}
             <button
               className="settingsToggle"
               type="button"
@@ -1007,18 +1407,62 @@ function App() {
             >
               <span className="switchTrack" aria-hidden="true"><span /></span>
               <span>Âm thanh</span>
-              <b>{soundEnabled ? "Bật" : "Tắt"}</b>
             </button>
+          </div>
+        </div>
+      )}
+      {confirmAction && (
+        <div className="confirmOverlay" role="dialog" aria-modal="true">
+          <div className="confirmPanel">
+            <p className="confirmMessage">{confirmAction.label}</p>
+            <div className="confirmActions">
+              <button
+                className="ghostButton"
+                onClick={() => setConfirmAction(null)}
+              >
+                Huỷ
+              </button>
+              <button
+                className="primaryButton"
+                onClick={() => { setSettingsOpen(false); setConfirmAction(null); confirmAction.onConfirm(); }}
+              >
+                Xác nhận
+              </button>
+            </div>
           </div>
         </div>
       )}
     </>
   );
 
+  const gameStartOverlay = gameStartInfo && (
+    <div className="gameStartOverlay" role="status" onClick={() => setGameStartInfo(null)}>
+      <div className="gameStartPanel">
+        <div className="gameStartRow">
+          <span className="gameStartLabel">Màu của bạn</span>
+          <span className="gameStartDot" style={{ "--player-color": gameStartInfo.playerColors[gameStartInfo.humanPlayer] }} />
+        </div>
+        <div className="gameStartRow">
+          <span className="gameStartLabel">Thứ tự lượt</span>
+          <span className="gameStartTurnOrder">
+            {gameStartInfo.turnOrder.map((pid, i) => (
+              <React.Fragment key={pid}>
+                {i > 0 && <span className="gameStartArrow" aria-hidden="true" />}
+                <span className="gameStartDot" style={{ "--player-color": gameStartInfo.playerColors[pid] }} />
+              </React.Fragment>
+            ))}
+          </span>
+        </div>
+        <span className="gameStartDismiss">nhấn để đóng</span>
+      </div>
+    </div>
+  );
+
   if (!scenarioData || !puzzle || !scenario) {
     return (
       <div className="appShell" onClickCapture={handleGlobalButtonSound}>
         {settingsOverlay}
+        {gameStartOverlay}
         <main className="app loading">Đang tải màn chơi...</main>
       </div>
     );
@@ -1028,6 +1472,7 @@ function App() {
     return (
       <div className="appShell" onClickCapture={handleGlobalButtonSound}>
         {settingsOverlay}
+        {gameStartOverlay}
         <button
           className="settingsButton lobbySettingsButton"
           type="button"
@@ -1035,7 +1480,7 @@ function App() {
           aria-expanded={settingsOpen}
           onClick={() => setSettingsOpen(true)}
         >
-          <span aria-hidden="true">⚙</span>
+          <span aria-hidden="true">☰</span>
         </button>
         <Lobby
           scenarioData={scenarioData}
@@ -1060,54 +1505,48 @@ function App() {
   return (
     <div className="appShell" onClickCapture={handleGlobalButtonSound}>
       {settingsOverlay}
+      {gameStartOverlay}
     <main className="app">
-      <header className="topBar">
-        <div>
-          <h1>Cryptid</h1>
-          <p>
-            {playMode === "duel" ? `Đối kháng ${roomCode} · Bạn là P${humanPlayer}` : `Chơi đơn · ${DIFFICULTY_LABELS[botDifficulty] ?? botDifficulty}`}
-            {" · "}Màn {scenario.scenarioId} · Độ khó {puzzle.meta.difficulty.score}
-          </p>
-        </div>
-        <div className="topActions">
-          <button
-            className="ghostButton"
-            onClick={leaveToLobby}
-          >
-            Sảnh
-          </button>
-          <button
-            className={`ghostButton ${gameOver ? "newGameReady" : ""}`}
-            onClick={newGame}
-            disabled={playMode === "duel" && !isDuelHost}
-          >
-            Ván mới
-          </button>
-          <button
-            className="ghostButton settingsButton"
-            type="button"
-            aria-label="Cài đặt"
-            aria-expanded={settingsOpen}
-            onClick={() => setSettingsOpen(true)}
-          >
-            <span aria-hidden="true">⚙</span>
-          </button>
-        </div>
-      </header>
-
       <section className="debugPanel">
-        <p className="status statusPanel">
-          <span className="turnStatus" style={{ "--player-color": PLAYER_COLORS[currentTurn] }}>{turnStatusText}</span>
-          <span aria-hidden="true"> | </span>
-          <span>{message}</span>
-        </p>
+        {playMode === "duel" && (
+          <NetworkStatusBar
+            roomCode={roomCode}
+            status={networkStatus}
+            playerCount={roomPlayers.length || 1}
+            maxPlayers={competitivePlayerCount}
+          />
+        )}
+        {!gameOver && (
+          <p
+            className="status statusPanel"
+            style={isHumanTurn ? { "--status-border-color": playerColors[humanPlayer] } : undefined}
+          >
+            <span className="turnStatusStrip" aria-label={`Lượt P${currentTurn}`}>
+              <span className="turnStatusLabel">{currentTurn === humanPlayer ? "Lượt bạn" : "Lượt"}</span>
+              <span className="turnSwatches">
+                {turnOrder.map((player) => (
+                  <span
+                    key={player}
+                    className={`turnSwatch ${player === currentTurn ? "turnSwatchActive" : ""}`}
+                    style={{ "--player-color": playerColors[player] }}
+                    aria-label={`P${player}${player === currentTurn ? " đang đi" : ""}`}
+                  >
+                    {player === currentTurn && <span className="turnPointer" aria-hidden="true" />}
+                  </span>
+                ))}
+              </span>
+            </span>
+            <span aria-hidden="true" className="statusDivider" />
+            <span>{renderMessage(visibleMessage, playerColors)}</span>
+          </p>
+        )}
         <div className="hintList">
-          {currentHints.filter((hint) => hint.player === humanPlayer).map((hint) => (
+          {currentHints.filter((hint) => gameOver || hint.player === humanPlayer).map((hint) => (
             <button
               key={hint.player}
               type="button"
               className="hintCard"
-              style={{ "--player-color": PLAYER_COLORS[hint.player] }}
+              style={{ "--player-color": playerColors[hint.player] }}
               role="switch"
               aria-checked={activeOverlays.includes(hint.player)}
               onClick={() => {
@@ -1118,26 +1557,55 @@ function App() {
                 );
               }}
             >
-              <span className="switchTrack" aria-hidden="true"><span /></span>
-              <span className="playerBadge">P{hint.player}</span>
-              <b>{hint.text}</b>
+              <span className="hintHeader">
+                <span className="switchTrack" aria-hidden="true"><span /></span>
+                <span className="playerBadge">
+                  {hint.player === humanPlayer ? "Gợi ý của bạn" : "Gợi ý của"}
+                  {hint.player !== humanPlayer && <span className="hintPlayerDot" aria-hidden="true" />}
+                </span>
+                {gameOver && gameOver.winner != null && (
+                  <span className={`hintResultBadge ${gameOver.winner === hint.player ? "hintResultWin" : "hintResultLose"}`}>
+                    {gameOver.winner === hint.player ? "Thắng" : "Thua"}
+                  </span>
+                )}
+                {hint.player === humanPlayer && !gameOver && (
+                  <span className="hintOwnColorText">
+                    Bạn màu
+                    <span
+                      className="hintOwnColor"
+                      style={{ "--player-color": playerColors[humanPlayer] }}
+                      aria-label={`Màu của bạn là P${humanPlayer}`}
+                    />
+                  </span>
+                )}
+              </span>
+              <span className="hintContent">
+                <HintVisual visual={hint.visual} text={hint.text} />
+                <span className="hintText">{hint.text}</span>
+              </span>
             </button>
           ))}
         </div>
-        {IS_DEBUG_PAGE && <button
-          type="button"
-          className="monsterToggle"
-          role="switch"
-          aria-checked={revealMonster}
-          onClick={() => {
-            playSound("toggle");
-            setRevealMonster((current) => !current);
-          }}
-        >
-          <span className="switchTrack" aria-hidden="true"><span /></span>
-          Quái vật
-        </button>}
-        {playMode === "duel" && <p className="networkStatus">{networkStatus}</p>}
+        {!gameOver && (
+          <div className="playerMarkToggles">
+            <span className="playerMarkTogglesLabel">Bật/tắt đánh dấu</span>
+            {[humanPlayer, ...playerIdsForCount(playerCount).filter((p) => p !== humanPlayer)].map((player) => (
+              <button
+                key={player}
+                className="playerToggleBtn"
+                style={{ "--player-color": playerColors[player] }}
+                type="button"
+                role="switch"
+                aria-checked={!hiddenPlayers.has(player)}
+                aria-label={`${hiddenPlayers.has(player) ? "Hiện" : "Ẩn"} mark ${player === humanPlayer ? "của bạn" : `P${player}`}`}
+                onClick={() => togglePlayerVisibility(player)}
+              >
+                <span className="switchTrack" aria-hidden="true"><span /></span>
+                {player === humanPlayer && <span>Bạn</span>}
+              </button>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="controlDock">
@@ -1163,21 +1631,33 @@ function App() {
 
         {!pendingAnswer && actionStep === "choose" && (
           <div className="actionGrid">
+            {gameOver ? (
+              <button
+                className="newGameReady"
+                disabled={playMode === "duel" && !isDuelHost}
+                onClick={() => { setSettingsOpen(false); newGame(); }}
+              >
+                Ván mới
+              </button>
+            ) : (
+              <button
+                disabled={!isHumanTurn || !selectedCell || pendingPenalty || (selectedCell && cellHasX(selectedCell.id))}
+                onClick={() => {
+                  playSound("click");
+                  setActionStep("askTarget");
+                  setMessage(`P${humanPlayer}: chọn người chơi để hỏi.`);
+                }}
+              >
+                Hỏi
+              </button>
+            )}
             <button
-              disabled={gameOver || !isHumanTurn || !selectedCell || pendingPenalty || (selectedCell && cellHasX(selectedCell.id))}
-              onClick={() => {
-                playSound("click");
-                setActionStep("askTarget");
-                setMessage(`P${humanPlayer}: chọn người chơi để hỏi.`);
-              }}
+              type="button"
+              aria-label="Menu"
+              aria-expanded={settingsOpen}
+              onClick={() => setSettingsOpen(true)}
             >
-              Hỏi
-            </button>
-            <button
-              disabled={gameOver || !selectedCell || cellHasOwnMark(selectedCell)}
-              onClick={() => toggleQuestionMark(selectedCell)}
-            >
-              ?
+              ☰
             </button>
             <button
               disabled={gameOver || !isHumanTurn || !selectedCell || pendingPenalty || !canGuessCell(selectedCell)}
@@ -1190,16 +1670,16 @@ function App() {
           </div>
         )}
 
-        {!pendingAnswer && actionStep === "askTarget" && (
+        {!pendingAnswer && isHumanTurn && !pendingPenalty && selectedCell && actionStep === "askTarget" && (
           <div className="targetGrid">
             {turnOrder.filter((player) => player !== humanPlayer).map((player) => (
               <button
                 key={player}
                 className="target"
-                style={{ "--player-color": PLAYER_COLORS[player] }}
+                style={{ "--player-color": playerColors[player] }}
                 onClick={() => ask(player)}
               >
-                P{player}
+                Hỏi <span className="playerColorSwatch" />
               </button>
             ))}
             <button
@@ -1220,6 +1700,7 @@ function App() {
         map={puzzle.map}
         marks={marks}
         questionMarks={questionMarks}
+        hiddenPlayers={hiddenPlayers}
         selectedCellId={selectedCell?.id}
         onSelectCell={(cell) => {
           if (gameOver) {
@@ -1238,18 +1719,18 @@ function App() {
             placePenaltyX(cell);
             return;
           }
+          if (selectedCell?.id === cell.id) {
+            playSound("click");
+            setSelectedCell(null);
+            setActionStep("choose");
+            setMessage(isHumanTurn ? `P${humanPlayer}: chọn một ô` : `Đang chờ lượt P${currentTurn}.`);
+            return;
+          }
           if (!isHumanTurn) {
             playSound("select");
             setSelectedCell(cell);
             setActionStep("choose");
             setMessage(`Đang chờ lượt P${currentTurn}.`);
-            return;
-          }
-          if (selectedCell?.id === cell.id) {
-            playSound("click");
-            setSelectedCell(null);
-            setActionStep("choose");
-            setMessage(`P${humanPlayer}: chọn một ô`);
             return;
           }
           setSelectedCell(cell);
@@ -1264,6 +1745,7 @@ function App() {
         monsterCellId={monsterCellId}
         playerCount={playerCount}
         markDropDelays={markDropDelays}
+        playerColors={playerColors}
       />
     </main>
     </div>

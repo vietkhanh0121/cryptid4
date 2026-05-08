@@ -1,1 +1,19 @@
-{"scripts":{"start":"node server.mjs","vite":"vite --host 0.0.0.0"},"dependencies":{"@vitejs/plugin-react":"latest","express":"^5.2.1","lucide-react":"latest","peer":"^1.0.2","peerjs":"^1.5.5","react":"latest","react-dom":"latest","vite":"latest"}}
+{
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "vite": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "express": "^5.2.1",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "vite": "latest"
+  }
+}

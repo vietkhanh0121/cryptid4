@@ -1,17 +1,19 @@
-export const PLAYER_COLORS = {
-  1: "#b927b0",
-  2: "#d6bb00",
-  3: "#00b8c9",
-  4: "#27bc12",
-  5: "#c400c4",
-};
+const _COLOR_PALETTE = ["#e63946", "#f4d03f", "#00b4d8", "#57cc99", "#c77dff"];
+
+export function generatePlayerColors() {
+  const shuffled = [..._COLOR_PALETTE].sort(() => Math.random() - 0.5);
+  return { 1: shuffled[0], 2: shuffled[1], 3: shuffled[2], 4: shuffled[3], 5: shuffled[4] };
+}
+
+export const PLAYER_COLORS = generatePlayerColors();
 
 export const HINT_STRIPE_ANGLES = ["25deg", "75deg", "135deg", "165deg", "-35deg"];
 
 export const BOT_DIFFICULTIES = {
-  Easy: { interval: 2400, guessChance: 0.22, askKnownBias: 0.2 },
-  Hard: { interval: 1700, guessChance: 0.42, askKnownBias: 0.55 },
-  Expert: { interval: 1150, guessChance: 0.64, askKnownBias: 0.82 },
+  //             interval  guessThreshold  humanBias  cellBias
+  Easy:   { interval: 2400, guessThreshold:  3, humanBias: 0.3,  cellBias: 0.2  },
+  Hard:   { interval: 1700, guessThreshold:  7, humanBias: 0.7,  cellBias: 0.55 },
+  Expert: { interval: 1150, guessThreshold: 14, humanBias: 0.9,  cellBias: 0.82 },
 };
 
 export const DEFAULT_BOT_DIFFICULTY = "Hard";

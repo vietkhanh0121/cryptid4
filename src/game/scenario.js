@@ -154,7 +154,7 @@ export function loadPuzzleForScenario(scenario, mapData) {
   const hints = (scenario.hints ?? [])
     .map((hint) => {
       const definition = hintById.get(hint.id);
-      return definition ? { ...definition, ...hint, text: hint.text ?? definition.text } : null;
+      return definition ? { ...definition, ...hint, text: definition.text } : null;
     })
     .filter(Boolean);
   const usesEmbeddedMap = scenarioHasPlayableMap(scenario);
