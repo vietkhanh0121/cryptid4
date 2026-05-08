@@ -1,10 +1,14 @@
 import http from "node:http";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import express from "express";
 import { Server as SocketIOServer } from "socket.io";
 import { createServer as createViteServer } from "vite";
 
 const PORT = Number(process.env.PORT ?? 5173);
 const HOST = process.env.HOST ?? "0.0.0.0";
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const DIST_DIR = resolve(process.cwd(), "dist");
 const rooms = new Map();
 
 function roomCode() {
@@ -296,14 +300,24 @@ app.use(async (req, res, next) => {
   }
 });
 
-const vite = await createViteServer({
-  server: { middlewareMode: true, host: HOST },
-  appType: "spa",
-});
+if (IS_PRODUCTION) {
+  if (!existsSync(DIST_DIR)) {
+    console.warn("dist folder not found. Run npm run build before npm start in production.");
+  }
+  app.use(express.static(DIST_DIR));
+  app.use((_req, res) => {
+    res.sendFile(resolve(DIST_DIR, "index.html"));
+  });
+} else {
+  const vite = await createViteServer({
+    server: { middlewareMode: true, host: HOST },
+    appType: "spa",
+  });
 
-app.use(vite.middlewares);
+  app.use(vite.middlewares);
+}
 
 server.listen(PORT, HOST, () => {
-  console.log(`Cryptid4 dev server running at http://localhost:${PORT}/`);
+  console.log(`Cryptid4 server running at http://localhost:${PORT}/`);
   console.log(`Socket.IO room server available at http://localhost:${PORT}/socket.io`);
 });
