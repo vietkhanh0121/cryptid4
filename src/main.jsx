@@ -14,6 +14,7 @@ import "./styles.css";
 
 const IS_DEBUG_PAGE = window.location.pathname.includes("index-debug");
 const ROOM_CODE_LENGTH = 4;
+const PUBLIC_BASE_URL = import.meta.env.BASE_URL || "./";
 
 const _SPRITE_STEM = (path) => path.split("/").pop().replace(/\.png$/, "");
 const _TERRAIN_MODS = import.meta.glob("./assets/sprites/terrain/*.png", { eager: true, import: "default" });
@@ -201,7 +202,7 @@ function App() {
   }
 
   useEffect(() => {
-    fetch("/cryptid-scenario.json")
+    fetch(`${PUBLIC_BASE_URL}cryptid-scenario.json`)
       .then((response) => response.json())
       .then((scenarios) => {
         setScenarioData(scenarios);
