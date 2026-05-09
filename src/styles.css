@@ -24,6 +24,9 @@
   --pixel-cream: #e8f0ff;
   --pixel-map: #07111f;
   --pixel-shadow: 4px 4px 0 var(--pixel-black);
+  --app-safe-top: max(12px, env(safe-area-inset-top));
+  --app-safe-bottom: max(14px, env(safe-area-inset-bottom));
+  --control-dock-height: 118px;
   font-synthesis: none;
   image-rendering: pixelated;
 }
@@ -75,7 +78,7 @@ summary:focus-visible {
   min-height: 100vh;
   max-width: 760px;
   margin: 0 auto;
-  padding: 12px 12px 118px;
+  padding: calc(var(--app-safe-top) + 14px) 12px calc(var(--control-dock-height) + var(--app-safe-bottom) + 12px);
 }
 
 .appShell {
@@ -1598,7 +1601,7 @@ summary:focus-visible {
   transform: translateX(-50%);
   display: grid;
   gap: 6px;
-  padding: 12px;
+  padding: 12px 12px calc(12px + var(--app-safe-bottom));
   border-top: 4px solid var(--pixel-line);
   border-radius: 14px 14px 0 0;
   background:
