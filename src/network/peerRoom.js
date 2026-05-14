@@ -79,6 +79,8 @@ export async function createPeerRoom({
   });
 
   let localPlayerId = playerId;
+  let registered = false;
+  let hostToken = null;
 
   socket.on("disconnect", () => {
     onStatus?.("Mất kết nối, đang thử kết nối lại...");
@@ -86,9 +88,9 @@ export async function createPeerRoom({
 
   socket.on("connect", () => {
     onStatus?.("Đã kết nối server online.");
-    if (!code) return;
+    if (!code || !registered) return;
     if (role === "host") {
-      socket.emit("room:resumeHost", { code, playerId: localPlayerId, state: getState?.() });
+      socket.emit("room:resumeHost", { code, playerId: localPlayerId, state: getState?.(), hostToken });
     } else if (localPlayerId) {
       socket.emit("room:resumeGuest", { code, playerId: localPlayerId });
     }
@@ -113,36 +115,41 @@ export async function createPeerRoom({
 
   await waitForConnect(socket);
 
-  if (role === "host") {
-    const response = await emitAck(socket, "room:create", {
-      code,
-      maxPlayers,
-      playerId,
-      state: getState?.(),
-    });
-    localPlayerId = Number(response.playerId);
-    onRoom?.(response.players ?? [localPlayerId]);
-    onStatus?.("Phòng online");
-  } else {
-    const response = await emitAck(socket, "room:join", {
-      code,
-      playerId,
-    });
-    localPlayerId = Number(response.playerId);
-    onRoom?.(response.players ?? []);
-    onState?.(response.state, localPlayerId);
-    onStatus?.("Phòng online");
+  try {
+    if (role === "host") {
+      const response = await emitAck(socket, "room:create", {
+        code,
+        maxPlayers,
+        playerId,
+        state: getState?.(),
+      });
+      localPlayerId = Number(response.playerId);
+      hostToken = response.hostToken ?? null;
+      registered = true;
+      onRoom?.(response.players ?? [localPlayerId]);
+      onStatus?.("Phòng online");
+    } else {
+      const response = await emitAck(socket, "room:join", {
+        code,
+        playerId,
+      });
+      localPlayerId = Number(response.playerId);
+      registered = true;
+      onRoom?.(response.players ?? []);
+      onState?.(response.state, localPlayerId);
+      onStatus?.("Phòng online");
+    }
+  } catch (error) {
+    socket.disconnect();
+    throw error;
   }
 
   return {
     peerId: socket.id,
     playerId: localPlayerId,
-    sendState(state) {
-      socket.emit("room:state", { code, state, playerId: localPlayerId });
-    },
     sendAction(kind, payload) {
       if (role === "host") return;
-      socket.emit("room:action", { code, kind, payload, playerId: localPlayerId });
+      socket.emit("room:action", { code, kind, payload });
     },
     broadcastState(state) {
       if (role !== "host") return;

@@ -183,6 +183,7 @@ function App() {
   const [gameStartInfo, setGameStartInfo] = useState(null);
   const [hiddenPlayers, setHiddenPlayers] = useState(new Set());
   const [playerColors, setPlayerColors] = useState(PLAYER_COLORS);
+  const [duelScenario, setDuelScenario] = useState(null);
 
   function playSound(effect) {
     playSoundEffect(effect, soundEnabled);
@@ -211,7 +212,7 @@ function App() {
       });
   }, []);
 
-  const scenario = scenarioData?.scenarios?.[scenarioIndex];
+  const scenario = (playMode === "duel" && duelScenario) || scenarioData?.scenarios?.[scenarioIndex];
   const playerCount = playMode === "duel" ? Math.max(competitivePlayerCount, 3) : (scenario?.playerCount ?? scenario?.hints?.length ?? 3);
   const puzzle = useMemo(() => {
     if (!scenario) return null;
@@ -370,8 +371,10 @@ function App() {
   }, [possibleHintIdsByPlayer]);
 
   function gameSnapshot(overrides = {}) {
+    const snapshotScenario = overrides.scenario ?? (playMode === "duel" ? (duelScenario ?? scenario) : null);
     return {
       scenarioIndex,
+      scenario: snapshotScenario,
       roomMaxPlayers: competitivePlayerCount,
       playerCount,
       hintDealSeed,
@@ -402,6 +405,7 @@ function App() {
       ? snapshot.selectedCellId
       : null;
     setScenarioIndex(snapshot.scenarioIndex ?? 0);
+    setDuelScenario(snapshot.scenario ?? null);
     setCompetitivePlayerCount(Math.min(Math.max(Number(snapshot.roomMaxPlayers ?? snapshot.playerCount ?? 3), 2), 5));
     setHintDealSeed(snapshot.hintDealSeed ?? 0);
     setMarks(snapshot.marks ?? {});
@@ -626,11 +630,12 @@ function App() {
     setNetworkStatus("Đang tạo phòng online...");
     try {
       const nextIndex = scenarioData?.scenarios?.length ? Math.floor(Math.random() * scenarioData.scenarios.length) : 0;
+      const nextScenario = scenarioData?.scenarios?.[nextIndex] ?? null;
       const seed = Math.floor(Math.random() * 0xffffffff);
-      const code = randomRoomCode();
       const nextTurnOrder = shuffledItems(playerIdsForCount(Math.max(competitivePlayerCount, 3)), Math.floor(Math.random() * 0xffffffff));
       const initialState = {
         scenarioIndex: nextIndex,
+        scenario: nextScenario,
         roomMaxPlayers: competitivePlayerCount,
         playerCount: Math.max(competitivePlayerCount, 3),
         hintDealSeed: seed,
@@ -648,25 +653,35 @@ function App() {
       };
       latestSnapshotRef.current = initialState;
       peerRoomRef.current?.close();
-      const peerRoom = await createPeerRoom({
-        peerId: roomPeerId(code),
-        role: "host",
-        playerId: 1,
-        maxPlayers: competitivePlayerCount,
-        getState: () => latestSnapshotRef.current ?? initialState,
-        onAction: (kind, payload, fromPlayer) => {
-          processActionRef.current?.(kind, payload, fromPlayer);
-        },
-        onRoom: (players) => {
-          setRoomPlayers(players);
-          setNetworkStatus("Phòng online");
-        },
-        onStatus: setNetworkStatus,
-      });
+      let code = "";
+      let peerRoom = null;
+      for (let attempt = 0; attempt < 5 && !peerRoom; attempt++) {
+        code = randomRoomCode();
+        try {
+          peerRoom = await createPeerRoom({
+            peerId: roomPeerId(code),
+            role: "host",
+            playerId: 1,
+            maxPlayers: competitivePlayerCount,
+            getState: () => latestSnapshotRef.current ?? initialState,
+            onAction: (kind, payload, fromPlayer) => {
+              processActionRef.current?.(kind, payload, fromPlayer);
+            },
+            onRoom: (players) => {
+              setRoomPlayers(players);
+              setNetworkStatus("Phòng online");
+            },
+            onStatus: setNetworkStatus,
+          });
+        } catch (error) {
+          if (!/Mã phòng đã tồn tại/.test(error.message) || attempt === 4) throw error;
+        }
+      }
       peerRoomRef.current = peerRoom;
       setPlayMode("duel");
       setNetworkRole("host");
       setLocalPlayer(1);
+      setDuelScenario(nextScenario);
       setRoomCode(code);
       setRoomPlayers([1]);
       applyGameSnapshot(initialState);
@@ -686,6 +701,7 @@ function App() {
   async function joinDuelRoom() {
     playSound("start");
     setPlayerColors(generatePlayerColors());
+    setDuelScenario(null);
     const code = roomCode.trim();
     if (!code) {
       playSound("denied");
@@ -701,8 +717,12 @@ function App() {
         playerId: null,
         maxPlayers: 3,
         onState: (state, assignedPlayerId) => {
+          const safePlayerId = Number(assignedPlayerId ?? peerRoomRef.current?.playerId ?? 1);
+          setPlayMode("duel");
+          setNetworkRole("guest");
+          setLocalPlayer(safePlayerId);
           applyGameSnapshot(state);
-          maybeShowGameStartOverlay(state, Number(assignedPlayerId ?? peerRoomRef.current?.playerId ?? 1));
+          maybeShowGameStartOverlay(state, safePlayerId);
         },
         onRoom: (players) => {
           setRoomPlayers(players);
@@ -735,6 +755,7 @@ function App() {
     setPlayMode("solo");
     setNetworkRole(null);
     setLocalPlayer(1);
+    setDuelScenario(null);
     setRoomCode("");
     setRoomPlayers([]);
     const { nextTurnOrder } = resetForScenario(scenarioIndex, { skipSync: true });
@@ -749,6 +770,7 @@ function App() {
     setPlayMode("solo");
     setNetworkRole(null);
     setLocalPlayer(1);
+    setDuelScenario(null);
     setRoomCode("");
     setRoomPlayers([]);
     setNetworkStatus("Tạo hoặc tham gia phòng online.");
@@ -757,11 +779,13 @@ function App() {
 
   function resetForScenario(nextIndex, overrides = {}) {
     const nextSeed = overrides.hintDealSeed ?? Math.floor(Math.random() * 0xffffffff);
+    const nextScenario = overrides.scenario ?? (playMode === "duel" ? scenarioData?.scenarios?.[nextIndex] ?? null : null);
     const playerIds = playMode === "duel" ? playerIdsForCount(Math.max(competitivePlayerCount, 3)) : [1, 2, 3];
     const nextTurnOrder = shuffledItems(playerIds, Math.floor(Math.random() * 0xffffffff));
     const nextCurrentTurn = nextTurnOrder[0];
     const nextMessage = overrides.message ?? `P${nextCurrentTurn}: chọn một ô`;
     setScenarioIndex(nextIndex);
+    setDuelScenario(nextScenario);
     setHintDealSeed(nextSeed);
     setTurnOrder(nextTurnOrder);
     setSelectedCell(null);
@@ -783,6 +807,7 @@ function App() {
     if (!overrides.skipSync && isDuelHost) {
       peerRoomRef.current?.broadcastState(gameSnapshot({
         scenarioIndex: nextIndex,
+        scenario: nextScenario,
         playerCount,
         hintDealSeed: nextSeed,
         marks: {},
