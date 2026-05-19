@@ -119,6 +119,331 @@ summary:focus-visible {
   text-shadow: 4px 4px 0 var(--pixel-black);
 }
 
+.lobbyGuideButton {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 120;
+  display: inline-grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 3px solid var(--pixel-black);
+  border-radius: 8px;
+  background: var(--pixel-yellow);
+  color: #171307;
+  font-size: 18px;
+  font-weight: 950;
+  cursor: pointer;
+  box-shadow: inset -3px -3px 0 var(--pixel-yellow-dark), inset 3px 3px 0 var(--pixel-yellow-light), 3px 3px 0 var(--pixel-black);
+}
+
+.lobbyGuideButton:hover {
+  transform: translate(-1px, -1px);
+}
+
+.lobbyGuideOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(2, 5, 16, .58);
+  backdrop-filter: blur(5px);
+}
+
+.lobbyGuidePanel {
+  display: grid;
+  gap: 14px;
+  width: min(100%, 430px);
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
+  border: 3px solid var(--pixel-line);
+  border-radius: 10px;
+  padding: 16px;
+  background:
+    linear-gradient(135deg, rgba(255,211,77,.08) 0 25%, transparent 25% 50%, rgba(0,0,0,.12) 50% 75%, transparent 75%),
+    rgba(11, 20, 48, 0.97);
+  background-size: 12px 12px;
+  box-shadow: var(--pixel-shadow);
+}
+
+.lobbyGuideHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lobbyGuideHeader h2 {
+  margin: 0;
+  color: var(--pixel-cream);
+  font-size: 22px;
+  line-height: 1.1;
+  text-transform: uppercase;
+  text-shadow: 2px 2px 0 var(--pixel-black);
+}
+
+.lobbyGuideClose {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--pixel-black);
+  border-radius: 8px;
+  background: var(--pixel-panel-2);
+  color: var(--pixel-ink);
+  cursor: pointer;
+  box-shadow: inset -3px -3px 0 #050d20, inset 3px 3px 0 #1d4a80, 3px 3px 0 var(--pixel-black);
+}
+
+.lobbyGuideSteps {
+  display: grid;
+  gap: 8px;
+}
+
+.lobbyGuideStep {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  align-items: start;
+  gap: 10px;
+  min-height: 42px;
+  padding: 9px;
+  border: 2px solid rgba(91, 143, 214, .55);
+  border-radius: 8px;
+  background: rgba(7, 17, 31, .82);
+}
+
+.lobbyGuideBody {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lobbyGuideBadge {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--pixel-black);
+  border-radius: 6px;
+  background: var(--pixel-blue);
+  color: #031017;
+  font-size: 13px;
+  font-weight: 950;
+  box-shadow: inset -2px -2px 0 #14768a, inset 2px 2px 0 #7fe8f7;
+}
+
+.lobbyGuideStep p {
+  margin: 0;
+  color: var(--pixel-ink);
+  font-size: 13px;
+  line-height: 1.45;
+  text-transform: uppercase;
+}
+
+.guideVisual {
+  position: relative;
+  min-height: 50px;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(255,255,255,.035) 1px, transparent 1px),
+    #050d20;
+  background-size: 8px 8px;
+}
+
+.guideTile {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 38px;
+  clip-path: polygon(25% 0%,75% 0%,100% 50%,75% 100%,25% 100%,0% 50%);
+  background: var(--terrain-color);
+  box-shadow: inset 0 0 0 2px var(--pixel-black);
+}
+
+.guideTile::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  z-index: 2;
+  clip-path: inherit;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.12) 0 14%, transparent 14% 100%),
+    rgba(0,0,0,.22);
+  pointer-events: none;
+}
+
+.guideTileSprite {
+  position: absolute;
+  inset: 2px;
+  z-index: 1;
+  width: calc(100% - 4px);
+  height: calc(100% - 4px);
+  object-fit: cover;
+  clip-path: inherit;
+}
+
+.guideTile-small {
+  position: relative;
+  inset: auto;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 33px;
+}
+
+.guideTile-a { left: calc(50% - 64px); top: 7px; }
+.guideTile-b { left: calc(50% - 22px); top: 7px; z-index: 3; }
+.guideTile-c { left: calc(50% + 20px); top: 7px; }
+
+.guideTile-selected {
+  position: relative;
+  inset: auto;
+  flex: 0 0 auto;
+  z-index: 3;
+  filter: drop-shadow(0 0 4px rgba(255, 211, 77, .7));
+}
+
+.guideVisual-map {
+  height: 52px;
+}
+
+.guideVisual-hint,
+.guideVisual-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 52px;
+  padding: 6px;
+}
+
+.guideHintCard {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 3px 6px;
+  border: 2px solid var(--pixel-black);
+  border-radius: 6px;
+  background: var(--pixel-yellow);
+  color: #171307;
+  font-size: 11px;
+  font-weight: 950;
+  box-shadow: inset -2px -2px 0 var(--pixel-yellow-dark), inset 2px 2px 0 var(--pixel-yellow-light), 2px 2px 0 var(--pixel-black);
+}
+
+.guideHintCard img {
+  width: 22px;
+  height: 20px;
+  object-fit: cover;
+  clip-path: polygon(25% 0%,75% 0%,100% 50%,75% 100%,25% 100%,0% 50%);
+}
+
+.guideHintArrow {
+  flex: 0 0 auto;
+  color: var(--pixel-muted);
+  font-size: 24px;
+  font-weight: 950;
+  line-height: 1;
+  text-shadow: 2px 2px 0 var(--pixel-black);
+}
+
+.guideActionButtons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  min-width: 104px;
+}
+
+.guideActionButtons span {
+  display: grid;
+  place-items: center;
+  min-height: 28px;
+  border: 2px solid var(--pixel-black);
+  border-radius: 6px;
+  background: var(--pixel-yellow);
+  color: #171307;
+  font-size: 10px;
+  font-weight: 950;
+  text-transform: uppercase;
+  box-shadow: inset -2px -2px 0 var(--pixel-yellow-dark), inset 2px 2px 0 var(--pixel-yellow-light), 2px 2px 0 var(--pixel-black);
+}
+
+.guideMonsterStack {
+  position: relative;
+  z-index: 5;
+  width: 30px;
+  height: 32px;
+  transform: translateY(-2px);
+}
+
+.guideMonsterSprite {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter:
+    drop-shadow(1px 0 0 #fff7ed)
+    drop-shadow(-1px 0 0 #fff7ed)
+    drop-shadow(0 1px 0 #fff7ed)
+    drop-shadow(0 -1px 0 #fff7ed)
+    drop-shadow(2px 2px 0 var(--pixel-black));
+}
+
+.guideMonsterSprite-base {
+  animation: monsterBaseFrame 2s steps(1, end) infinite;
+}
+
+.guideMonsterSprite-anim,
+.guideMonsterSprite-anim2 {
+  opacity: 0;
+}
+
+.guideMonsterSprite-anim {
+  animation: monsterAnimFrame 2s steps(1, end) infinite;
+}
+
+.guideMonsterSprite-anim2 {
+  animation: monsterAnim2Frame 2s steps(1, end) infinite;
+}
+
+.guideMark,
+.guideQuestion {
+  position: relative;
+  z-index: 8;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  font-size: 22px;
+  font-weight: 950;
+  line-height: 1;
+  text-shadow:
+    1px 0 0 #fff7ed,
+    -1px 0 0 #fff7ed,
+    0 1px 0 #fff7ed,
+    0 -1px 0 #fff7ed,
+    2px 2px 0 var(--pixel-black);
+}
+
+.guideMark-green { color: var(--pixel-green); }
+.guideMark-red { color: var(--pixel-red); }
+.guideMark-blue,
+.guideQuestion { color: var(--pixel-blue); }
+
+.guideTile-Desert { --terrain-color: #9a6818; }
+.guideTile-Sea { --terrain-color: #0f627d; }
+.guideTile-Forest { --terrain-color: #225d3c; }
+.guideTile-Mountain { --terrain-color: #5f6670; }
+.guideTile-Swamp { --terrain-color: #5b4175; }
+
 .lobbySpriteRow {
   display: flex;
   align-items: flex-end;

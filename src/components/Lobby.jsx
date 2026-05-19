@@ -3,9 +3,38 @@ import { BOT_DIFFICULTIES, DIFFICULTY_LABELS } from "../game/config";
 
 const _ANIMAL_MODS = import.meta.glob("../assets/sprites/animal/*.png", { eager: true, import: "default" });
 const _MONSTER_MODS = import.meta.glob("../assets/sprites/monster/*.png", { eager: true, import: "default" });
+const _TERRAIN_MODS = import.meta.glob("../assets/sprites/terrain/*.png", { eager: true, import: "default" });
 function _stem(path) { return path.split("/").pop().replace(/\.png$/, ""); }
 const ANIMAL = Object.fromEntries(Object.entries(_ANIMAL_MODS).map(([p, src]) => [_stem(p), src]));
 const MONSTER = Object.fromEntries(Object.entries(_MONSTER_MODS).map(([p, src]) => [_stem(p), src]));
+const TERRAIN = Object.fromEntries(Object.entries(_TERRAIN_MODS).map(([p, src]) => [_stem(p), src]));
+
+function GuideTile({ terrain, className = "", children }) {
+  return (
+    <span className={`guideTile guideTile-${terrain} ${className}`}>
+      {TERRAIN[`${terrain}_1`] && <img className="guideTileSprite" src={TERRAIN[`${terrain}_1`]} alt="" />}
+      {children}
+    </span>
+  );
+}
+
+function GuideMonster() {
+  return (
+    <span className="guideMonsterStack">
+      <img className="guideMonsterSprite guideMonsterSprite-base" src={MONSTER.Monster} alt="" />
+      {MONSTER.Monster_Anim && <img className="guideMonsterSprite guideMonsterSprite-anim" src={MONSTER.Monster_Anim} alt="" />}
+      {MONSTER.Monster_Anim2 && <img className="guideMonsterSprite guideMonsterSprite-anim2" src={MONSTER.Monster_Anim2} alt="" />}
+    </span>
+  );
+}
+
+function GuideMark({ value, tone = "blue" }) {
+  return (
+    <span className={`guideMark guideMark-${value} guideMark-${tone}`} aria-hidden="true">
+      {value}
+    </span>
+  );
+}
 
 export function Lobby({
   scenarioData,
@@ -24,10 +53,84 @@ export function Lobby({
   debugMode,
 }) {
   const [lobbyMode, setLobbyMode] = React.useState(null);
+  const [guideOpen, setGuideOpen] = React.useState(true);
   const scenarios = scenarioData?.scenarios ?? [];
 
   return (
     <main className="app lobby">
+      <button
+        className="lobbyGuideButton"
+        type="button"
+        aria-label="Mở hướng dẫn"
+        onClick={() => setGuideOpen(true)}
+      >
+        ?
+      </button>
+
+      {guideOpen && (
+        <div className="lobbyGuideOverlay" role="dialog" aria-modal="true" aria-labelledby="lobby-guide-title">
+          <section className="lobbyGuidePanel">
+            <div className="lobbyGuideHeader">
+              <h2 id="lobby-guide-title">Hướng dẫn nhanh</h2>
+              <button
+                className="lobbyGuideClose"
+                type="button"
+                aria-label="Đóng hướng dẫn"
+                onClick={() => setGuideOpen(false)}
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            </div>
+            <div className="lobbyGuideSteps">
+              <div className="lobbyGuideStep">
+                <span className="lobbyGuideBadge">1</span>
+                <div className="lobbyGuideBody">
+                  <div className="guideVisual guideVisual-map" aria-hidden="true">
+                    <GuideTile terrain="Forest" className="guideTile-a" />
+                    <GuideTile terrain="Mountain" className="guideTile-b"><GuideMonster /></GuideTile>
+                    <GuideTile terrain="Sea" className="guideTile-c" />
+                  </div>
+                  <p>Có 1 ô quái vật duy nhất trên bản đồ, tìm ô đó.</p>
+                </div>
+              </div>
+              <div className="lobbyGuideStep">
+                <span className="lobbyGuideBadge">2</span>
+                <div className="lobbyGuideBody">
+                  <div className="guideVisual guideVisual-hint" aria-hidden="true">
+                    <span className="guideHintCard">
+                      <img src={TERRAIN.Forest_1} alt="" />
+                      <span>≤1</span>
+                    </span>
+                    <span className="guideHintArrow">›</span>
+                    <GuideTile terrain="Forest" className="guideTile-small"><GuideMark value="O" tone="green" /></GuideTile>
+                    <GuideTile terrain="Sea" className="guideTile-small"><GuideMark value="X" tone="red" /></GuideTile>
+                  </div>
+                  <p>Mỗi người giữ một gợi ý riêng, đoán gợi ý của đối phương để tìm ô quái vật.</p>
+                </div>
+              </div>
+              <div className="lobbyGuideStep">
+                <span className="lobbyGuideBadge">3</span>
+                <div className="lobbyGuideBody">
+                  <div className="guideVisual guideVisual-action" aria-hidden="true">
+                    <GuideTile terrain="Swamp" className="guideTile-selected">
+                      <span className="guideQuestion">?</span>
+                    </GuideTile>
+                    <span className="guideActionButtons">
+                      <span>Hỏi</span>
+                      <span>Đoán</span>
+                    </span>
+                  </div>
+                  <p>Đến lượt, chọn một ô rồi Hỏi để lấy thông tin hoặc Đoán khi đã chắc.</p>
+                </div>
+              </div>
+            </div>
+            <button className="primaryButton" type="button" onClick={() => setGuideOpen(false)}>
+              Đã hiểu
+            </button>
+          </section>
+        </div>
+      )}
+
       <section className="lobbyHero">
         <div className="lobbySpriteRow" aria-hidden="true">
           <span className="lobbySpriteStack">
