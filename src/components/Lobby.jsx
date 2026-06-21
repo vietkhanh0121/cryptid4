@@ -53,8 +53,17 @@ export function Lobby({
   debugMode,
 }) {
   const [lobbyMode, setLobbyMode] = React.useState(null);
-  const [guideOpen, setGuideOpen] = React.useState(true);
+  const [guideOpen, setGuideOpen] = React.useState(false);
   const scenarios = scenarioData?.scenarios ?? [];
+  const confirmCompetitiveInput = () => {
+    if (roomCode.trim()) onJoinDuel();
+    else onCreateDuel();
+  };
+  const handleCompetitiveInputKeyDown = (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    confirmCompetitiveInput();
+  };
 
   return (
     <main className="app lobby">
@@ -233,13 +242,16 @@ export function Lobby({
             <input
               value={roomCode}
               onChange={(event) => setRoomCode(event.target.value.replace(/\D/g, "").slice(0, 4))}
+              onKeyDown={handleCompetitiveInputKeyDown}
               placeholder="MÃ PHÒNG"
               aria-label="Mã phòng"
               inputMode="numeric"
+              enterKeyHint="go"
             />
             <button
               className={roomCode.trim() ? "primaryButton roomJoinButton" : "ghostButton roomJoinButton"}
               type="button"
+              disabled={!roomCode.trim()}
               onClick={onJoinDuel}
             >
               Vào

@@ -63,6 +63,9 @@ export async function createPeerRoom({
   hostPeerId,
   playerId,
   maxPlayers,
+  playerName,
+  playerAvatar,
+  playerColor,
   getState,
   onState,
   onAction,
@@ -90,9 +93,9 @@ export async function createPeerRoom({
     onStatus?.("Đã kết nối server online.");
     if (!code || !registered) return;
     if (role === "host") {
-      socket.emit("room:resumeHost", { code, playerId: localPlayerId, state: getState?.(), hostToken });
+      socket.emit("room:resumeHost", { code, playerId: localPlayerId, playerName, playerAvatar, playerColor, state: getState?.(), hostToken });
     } else if (localPlayerId) {
-      socket.emit("room:resumeGuest", { code, playerId: localPlayerId });
+      socket.emit("room:resumeGuest", { code, playerId: localPlayerId, playerName, playerAvatar, playerColor });
     }
   });
 
@@ -105,8 +108,8 @@ export async function createPeerRoom({
     onAction?.(kind, payload, Number(fromPlayer));
   });
 
-  socket.on("room:players", ({ players }) => {
-    onRoom?.(players ?? []);
+  socket.on("room:players", ({ players, playerNames, playerAvatars, playerColors }) => {
+    onRoom?.(players ?? [], playerNames ?? {}, playerAvatars ?? {}, playerColors ?? {});
   });
 
   socket.on("room:error", ({ message }) => {
@@ -121,23 +124,29 @@ export async function createPeerRoom({
         code,
         maxPlayers,
         playerId,
+        playerName,
+        playerAvatar,
+        playerColor,
         state: getState?.(),
       });
       localPlayerId = Number(response.playerId);
       hostToken = response.hostToken ?? null;
       registered = true;
-      onRoom?.(response.players ?? [localPlayerId]);
-      onStatus?.("Phòng online");
+      onRoom?.(response.players ?? [localPlayerId], response.playerNames ?? {}, response.playerAvatars ?? {}, response.playerColors ?? {});
+      onStatus?.("Phòng Sẵn sàng");
     } else {
       const response = await emitAck(socket, "room:join", {
         code,
         playerId,
+        playerName,
+        playerAvatar,
+        playerColor,
       });
       localPlayerId = Number(response.playerId);
       registered = true;
-      onRoom?.(response.players ?? []);
+      onRoom?.(response.players ?? [], response.playerNames ?? {}, response.playerAvatars ?? {}, response.playerColors ?? {});
       onState?.(response.state, localPlayerId);
-      onStatus?.("Phòng online");
+      onStatus?.("Phòng Sẵn sàng");
     }
   } catch (error) {
     socket.disconnect();
@@ -154,6 +163,12 @@ export async function createPeerRoom({
     broadcastState(state) {
       if (role !== "host") return;
       socket.emit("room:state", { code, state, playerId: localPlayerId });
+    },
+    updateProfile(name, avatar = playerAvatar, color = null) {
+      socket.emit("room:updateProfile", { code, playerId: localPlayerId, playerName: name, playerAvatar: avatar, playerColor: color });
+    },
+    updateName(name) {
+      socket.emit("room:updateProfile", { code, playerId: localPlayerId, playerName: name, playerAvatar });
     },
     close() {
       socket.emit("room:leave", { code, playerId: localPlayerId });

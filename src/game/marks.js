@@ -1,16 +1,21 @@
 import { playerIdsForCount } from "./config";
 
 function markPositionForPlayer(index, playerCount) {
-  const cornerPositions = [
-    { x: 31, y: 22 },
-    { x: 69, y: 22 },
-    { x: 82, y: 50 },
-    { x: 69, y: 78 },
-    { x: 31, y: 78 },
-    { x: 18, y: 50 },
-  ];
+  const perspectivePositions = playerCount <= 3
+    ? [
+        { x: 50, y: 78 },
+        { x: 31, y: 22 },
+        { x: 69, y: 22 },
+      ]
+    : [
+        { x: 50, y: 78 },
+        { x: 18, y: 50 },
+        { x: 31, y: 22 },
+        { x: 69, y: 22 },
+        { x: 82, y: 50 },
+      ];
 
-  if (playerCount >= 3) return cornerPositions[index] ?? { x: 50, y: 50 };
+  if (playerCount >= 3) return perspectivePositions[index] ?? { x: 50, y: 50 };
 
   const startAngle = playerCount === 4 ? -Math.PI * 0.75 : -Math.PI / 2;
   const angle = startAngle + (Math.PI * 2 * index) / playerCount;
@@ -39,13 +44,23 @@ export function setCellMark(marks, cellId, player, value) {
   };
 }
 
-function positionedEntriesForPlayers(players, playerCount, baseZIndex) {
-  const markSize = playerCount >= 5 ? 15 : 16.5;
+function playersFromLocalPerspective(playerCount, localPlayer = 1, opponentPlayers = null) {
+  if (Array.isArray(opponentPlayers) && opponentPlayers.length) {
+    return [localPlayer, ...opponentPlayers.filter((player) => player !== localPlayer)];
+  }
   const allPlayers = playerIdsForCount(playerCount);
+  const localIndex = allPlayers.indexOf(localPlayer);
+  if (localIndex < 0) return allPlayers;
+  return allPlayers.slice(localIndex).concat(allPlayers.slice(0, localIndex));
+}
+
+function positionedEntriesForPlayers(players, playerCount, baseZIndex, localPlayer = 1, opponentPlayers = null) {
+  const markSize = playerCount >= 5 ? 15 : 16.5;
+  const perspectivePlayers = playersFromLocalPerspective(playerCount, localPlayer, opponentPlayers);
 
   return players
     .map((player) => {
-      const index = allPlayers.indexOf(player);
+      const index = perspectivePlayers.indexOf(player);
       if (index < 0) return null;
 
       return {
@@ -58,8 +73,8 @@ function positionedEntriesForPlayers(players, playerCount, baseZIndex) {
     .filter(Boolean);
 }
 
-export function markEntriesForCell(cellMarks, cellId, playerCount) {
-  return positionedEntriesForPlayers(playerIdsForCount(playerCount), playerCount, 18)
+export function markEntriesForCell(cellMarks, cellId, playerCount, localPlayer = 1, opponentPlayers = null) {
+  return positionedEntriesForPlayers(playerIdsForCount(playerCount), playerCount, 18, localPlayer, opponentPlayers)
     .map((entry) => {
       const value = cellMarks[entry.player];
       return value ? { ...entry, cellId, value } : null;
@@ -67,12 +82,12 @@ export function markEntriesForCell(cellMarks, cellId, playerCount) {
     .filter(Boolean);
 }
 
-export function questionEntriesForCell(questionMarks, cellId, playerCount) {
+export function questionEntriesForCell(questionMarks, cellId, playerCount, localPlayer = 1, opponentPlayers = null) {
   const entry = questionMarks[cellId];
   if (!entry) return [];
   const players = entry === true
     ? [1]
     : playerIdsForCount(playerCount).filter((player) => entry[player]);
 
-  return positionedEntriesForPlayers(players, playerCount, 24);
+  return positionedEntriesForPlayers(players, playerCount, 24, localPlayer, opponentPlayers);
 }

@@ -1,7 +1,7 @@
 import React from "react";
 import { TERRAIN_LABELS } from "../constants";
 import { HINT_STRIPE_ANGLES } from "../game/config";
-import { markDropKey, markEntriesForCell, markersForCell, questionEntriesForCell } from "../game/marks";
+import { markDropKey, markEntriesForCell, markersForCell } from "../game/marks";
 
 const HEX_WIDTH = 70;
 const HEX_HEIGHT = 60;
@@ -118,10 +118,11 @@ function AnimalIcon({ animal }) {
   );
 }
 
-function MarkIcon({ value, player, size, x, y, zIndex, dropDelay = 0, hidden = false, playerColors }) {
+function MarkIcon({ value, player, size, x, y, zIndex, dropDelay = 0, animateDrop = false, hidden = false, playerColors }) {
+  if (hidden) return null;
   return (
     <svg
-      className={`markSvg markSvg-${value}`}
+      className={`markSvg markSvg-${value} ${animateDrop ? "markSvgDrop" : ""}`}
       viewBox="0 0 40 40"
       style={{
         "--player-color": playerColors[player],
@@ -130,7 +131,6 @@ function MarkIcon({ value, player, size, x, y, zIndex, dropDelay = 0, hidden = f
         "--mark-y": `${y}%`,
         "--mark-z": zIndex,
         "--mark-drop-delay": `${dropDelay}ms`,
-        visibility: hidden ? "hidden" : "visible",
       }}
       aria-hidden="true"
     >
@@ -156,24 +156,6 @@ function MonsterIcon() {
   );
 }
 
-function QuestionMark({ player, size, x, y, zIndex, hidden = false, playerColors }) {
-  return (
-    <span
-      className="questionMark"
-      style={{
-        "--player-color": playerColors[player],
-        "--mark-size": `${size}px`,
-        "--mark-x": `${x}%`,
-        "--mark-y": `${y}%`,
-        "--mark-z": zIndex,
-        visibility: hidden ? "hidden" : "visible",
-      }}
-    >
-      ?
-    </span>
-  );
-}
-
 export function Board({
   map,
   marks,
@@ -186,15 +168,37 @@ export function Board({
   revealMonster,
   monsterCellId,
   playerCount,
+  localPlayer,
+  opponentPlayers,
   markDropDelays,
   hiddenPlayers,
   playerColors,
+  renderCellAction,
 }) {
   const layout = boardLayout(map);
+  const boardScale = Math.min(1, 334 / layout.width, 338 / layout.height) * 1.21;
   const selectedCell = selectedCellId ? map.cells.find((cell) => cell.id === selectedCellId) : null;
+  const selectedActionX = selectedCell ? cellLeft(selectedCell, layout) + HEX_WIDTH / 2 : 0;
+  const selectedActionY = selectedCell ? cellTop(selectedCell, layout) + HEX_HEIGHT / 2 : 0;
+  const selectedActionHorizontalClass = selectedActionX > layout.width - 104
+    ? "cellActionAnchor-shiftLeft"
+    : selectedActionX < 104
+      ? "cellActionAnchor-shiftRight"
+      : "";
+  const selectedCellAction = selectedCell && renderCellAction
+    ? renderCellAction(selectedCell)
+    : null;
 
   return (
-    <div className="boardFrame">
+    <div
+      className="boardFrame"
+      style={{
+        "--board-scale": boardScale,
+        "--inverse-board-scale": 1 / boardScale,
+        "--board-frame-width": `${layout.width * boardScale}px`,
+        "--board-frame-height": `${layout.height * boardScale}px`,
+      }}
+    >
       <div className="board" style={{ width: layout.width, height: layout.height }}>
         {selectedCell && (
           <span
@@ -208,6 +212,13 @@ export function Board({
         )}
         {map.cells.map((cell) => {
           const cellMarks = markersForCell(marks, cell.id);
+          const cellMarkEntries = markEntriesForCell(cellMarks, cell.id, playerCount, localPlayer, opponentPlayers);
+          const cellMarkDropDelays = cellMarkEntries
+            .map((mark) => markDropKey(mark.cellId, mark.player))
+            .filter((dropKey) => Object.prototype.hasOwnProperty.call(markDropDelays, dropKey))
+            .map((dropKey) => markDropDelays[dropKey] ?? 0);
+          const hasCellMarkDrop = cellMarkDropDelays.length > 0;
+          const cellMarkDropDelay = hasCellMarkDrop ? Math.min(...cellMarkDropDelays) : 0;
           const terrainAsset = terrainAssetForCell(cell);
           const activeHintLayers = activeOverlays
             .map((player) => ({ player, hint: hintsByPlayer[player] }))
@@ -215,10 +226,15 @@ export function Board({
           const activePredictionLayers = predictionHints.filter(({ hint }) => hint?.check(cell, map));
 
           return (
-            <button
-              key={cell.id}
-              className={`hex terrain-${cell.terrain} ${selectedCellId === cell.id ? "selected" : ""}`}
+            <React.Fragment key={cell.id}>
+            <span
+              className="hexTileShadow"
               style={{ left: cellLeft(cell, layout), top: cellTop(cell, layout) }}
+              aria-hidden="true"
+            />
+            <button
+              className={`hex terrain-${cell.terrain} ${selectedCellId === cell.id ? "selected" : ""} ${hasCellMarkDrop ? "hexMarkWiggle" : ""}`}
+              style={{ left: cellLeft(cell, layout), top: cellTop(cell, layout), "--hex-mark-wiggle-delay": `${cellMarkDropDelay}ms` }}
               onClick={() => onSelectCell(cell)}
               title={`${cell.id} ${terrainLabel(cell.terrain)}`}
             >
@@ -260,38 +276,47 @@ export function Board({
               </span>
 
               <span className="markStack">
-                {markEntriesForCell(cellMarks, cell.id, playerCount).map((mark) => (
-                  <MarkIcon
-                    key={`${mark.player}-${mark.value}`}
-                    player={mark.player}
-                    value={mark.value}
-                    size={mark.size}
-                    x={mark.x}
-                    y={mark.y}
-                    zIndex={mark.zIndex}
-                    dropDelay={markDropDelays[markDropKey(mark.cellId, mark.player)] ?? 0}
-                    hidden={hiddenPlayers?.has(mark.player) ?? false}
-                    playerColors={playerColors}
-                  />
-                ))}
-                {questionEntriesForCell(questionMarks, cell.id, playerCount).map((mark) => (
-                  <QuestionMark
-                    key={`question-${mark.player}`}
-                    player={mark.player}
-                    size={mark.size}
-                    x={mark.x}
-                    y={mark.y}
-                    zIndex={mark.zIndex}
-                    hidden={hiddenPlayers?.has(mark.player) ?? false}
-                    playerColors={playerColors}
-                  />
-                ))}
+                {cellMarkEntries.map((mark) => {
+                  const dropKey = markDropKey(mark.cellId, mark.player);
+                  const hasDropAnimation = Object.prototype.hasOwnProperty.call(markDropDelays, dropKey);
+                  return (
+                    <MarkIcon
+                      key={`${mark.player}-${mark.value}`}
+                      player={mark.player}
+                      value={mark.value}
+                      size={mark.size}
+                      x={mark.x}
+                      y={mark.y}
+                      zIndex={mark.zIndex}
+                      dropDelay={markDropDelays[dropKey] ?? 0}
+                      animateDrop={hasDropAnimation}
+                      hidden={hiddenPlayers?.has(mark.player) ?? false}
+                      playerColors={playerColors}
+                    />
+                  );
+                })}
               </span>
 
               {revealMonster && cell.id === monsterCellId && <MonsterIcon />}
             </button>
+            </React.Fragment>
           );
         })}
+        {selectedCellAction && (
+          <div
+            className={`cellActionAnchor ${
+              cellTop(selectedCell, layout) < layout.height * 0.42
+                ? "cellActionAnchor-below"
+                : "cellActionAnchor-above"
+            } ${selectedActionHorizontalClass}`}
+            style={{
+              left: selectedActionX,
+              top: selectedActionY,
+            }}
+          >
+            {selectedCellAction}
+          </div>
+        )}
       </div>
     </div>
   );

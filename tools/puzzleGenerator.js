@@ -1,6 +1,6 @@
-import { generateRandomMap, pickMonsterCell } from "./mapGenerator";
-import { randomCombination, shuffle } from "./random";
-import { buildHintPool } from "./hints";
+import { generateRandomMap, pickMonsterCell } from "../src/mapGenerator";
+import { randomCombination, shuffle } from "../src/random";
+import { buildHintPool } from "../src/hints";
 
 export function getPossibleCells(map, hints) {
   return map.cells.filter((cell) => hints.every((hint) => hint.check(cell, map)));

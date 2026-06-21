@@ -1,7 +1,7 @@
-const _COLOR_PALETTE = ["#e63946", "#f4d03f", "#00b4d8", "#57cc99", "#c77dff"];
+export const PLAYER_COLOR_PALETTE = ["#ff4d5e", "#f4d03f", "#00b4d8", "#57cc99", "#c77dff"];
 
 export function generatePlayerColors() {
-  const shuffled = [..._COLOR_PALETTE].sort(() => Math.random() - 0.5);
+  const shuffled = [...PLAYER_COLOR_PALETTE].sort(() => Math.random() - 0.5);
   return { 1: shuffled[0], 2: shuffled[1], 3: shuffled[2], 4: shuffled[3], 5: shuffled[4] };
 }
 

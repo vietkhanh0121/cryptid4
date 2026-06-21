@@ -64,6 +64,30 @@ export function selectAskCell(player, config, puzzle, cellHasX, selectedHintResu
   return randomItem(candidates);
 }
 
+export function selectAskPair(player, config, humanPlayers, turnOrder, puzzle, cellHasX, selectedHintResult, marks) {
+  const targetPlayers = turnOrder.filter((p) => p !== player);
+  const openCells = puzzle.map.cells.filter((cell) => !cellHasX(cell.id));
+  const informedCells = openCells.filter((cell) => selectedHintResult(player, cell));
+  const preferredCells =
+    Math.random() < config.cellBias && informedCells.length ? informedCells : openCells;
+  const humanTargets = targetPlayers.filter((p) => humanPlayers.includes(p));
+  const preferredTargets = humanTargets.length && Math.random() < config.humanBias
+    ? humanTargets
+    : targetPlayers;
+
+  function buildPairs(targets, cells) {
+    return targets.flatMap((target) => (
+      cells
+        .filter((cell) => !markersForCell(marks, cell.id)[target])
+        .map((cell) => ({ targetPlayer: target, cell }))
+    ));
+  }
+
+  return randomItem(buildPairs(preferredTargets, preferredCells))
+    ?? randomItem(buildPairs(targetPlayers, openCells))
+    ?? null;
+}
+
 // -----------------------------------------------------------------------
 // selectGuessCell
 // Chọn ô để đoán vị trí quái vật.
