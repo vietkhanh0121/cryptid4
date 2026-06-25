@@ -228,24 +228,6 @@ function mergePlayerAvatars(...avatarSets) {
   }, {});
 }
 
-function resolvePlayerColorChoice(currentColors, player, requestedColor, players = []) {
-  if (!PLAYER_COLOR_PALETTE.includes(requestedColor)) return currentColors;
-  const nextColors = { ...(currentColors ?? {}) };
-  const activePlayers = players.length ? players : Object.keys(nextColors).map(Number);
-  const displacedPlayer = activePlayers.find((candidate) => (
-    candidate !== player && nextColors[candidate] === requestedColor
-  ));
-  nextColors[player] = requestedColor;
-  if (displacedPlayer) {
-    const usedColors = new Set(activePlayers
-      .filter((candidate) => candidate !== displacedPlayer)
-      .map((candidate) => nextColors[candidate])
-      .filter(Boolean));
-    nextColors[displacedPlayer] = PLAYER_COLOR_PALETTE.find((color) => !usedColors.has(color)) ?? nextColors[displacedPlayer];
-  }
-  return nextColors;
-}
-
 const DEFAULT_STATUS_MESSAGES = {
   local: "Lượt của bạn",
   remote: "",
@@ -289,6 +271,33 @@ function randomAvatarsForPlayers(players, fixedAvatars = {}) {
       ? String(fixedAvatars[player])
       : shuffledAvatarIds[index % Math.max(shuffledAvatarIds.length, 1)] ?? DEFAULT_PLAYER_AVATAR_ID,
   ]));
+}
+
+function randomColorsForPlayers(players, fixedColors = {}) {
+  const usedColors = new Set(
+    Object.values(fixedColors).filter((color) => PLAYER_COLOR_PALETTE.includes(color))
+  );
+  const availableColors = shuffledItems(
+    PLAYER_COLOR_PALETTE.filter((color) => !usedColors.has(color)),
+    Math.floor(Math.random() * 0xffffffff)
+  );
+  let availableIndex = 0;
+
+  return Object.fromEntries(players.map((player) => {
+    const fixedColor = fixedColors[player];
+    if (PLAYER_COLOR_PALETTE.includes(fixedColor)) return [player, fixedColor];
+    const color = availableColors[availableIndex] ?? PLAYER_COLOR_PALETTE[availableIndex % PLAYER_COLOR_PALETTE.length];
+    availableIndex += 1;
+    return [player, color];
+  }));
+}
+
+function valuesForPlayers(values, players) {
+  return Object.fromEntries(
+    players
+      .filter((player) => values?.[player])
+      .map((player) => [player, values[player]])
+  );
 }
 
 function readStoredPlayerName() {
@@ -483,7 +492,10 @@ function PlayerProfileSetup({
   initialAvatarId = DEFAULT_PLAYER_AVATAR_ID,
   initialColor = PLAYER_COLOR_PALETTE[0],
   availableColors = PLAYER_COLOR_PALETTE,
+  unavailableAvatarIds = [],
+  unavailableColors = [],
   showColorPicker = false,
+  saving = false,
   onConfirm,
   title = "Tạo nhân vật",
   label = "Lần đầu vào game",
@@ -537,6 +549,7 @@ function PlayerProfileSetup({
                 className="profileAvatarChoice"
                 role="radio"
                 aria-checked={avatarId === avatar.id}
+                disabled={unavailableAvatarIds.includes(avatar.id)}
                 onClick={() => setAvatarId(avatar.id)}
               >
                 <img src={avatar.src} alt="" aria-hidden="true" />
@@ -555,6 +568,7 @@ function PlayerProfileSetup({
                   className="profileColorChoice"
                   role="radio"
                   aria-checked={playerColor === color}
+                  disabled={unavailableColors.includes(color)}
                   style={{ "--profile-choice-color": color }}
                   onClick={() => setPlayerColor(color)}
                 >
@@ -564,8 +578,8 @@ function PlayerProfileSetup({
             </div>
           </div>
         )}
-        <button className="primaryButton" type="button" disabled={!canConfirm} onClick={confirmProfile}>
-          {submitLabel}
+        <button className="primaryButton" type="button" disabled={!canConfirm || saving} onClick={confirmProfile}>
+          {saving ? "Đang lưu..." : submitLabel}
         </button>
       </section>
     </main>
@@ -576,7 +590,10 @@ function ProfileEditorOverlay({
   initialName,
   initialAvatarId,
   initialColor,
+  unavailableAvatarIds = [],
+  unavailableColors = [],
   showColorPicker = false,
+  saving = false,
   onConfirm,
   onClose = null,
   title = "Sửa nhân vật",
@@ -601,7 +618,10 @@ function ProfileEditorOverlay({
           initialAvatarId={initialAvatarId}
           initialColor={initialColor}
           availableColors={PLAYER_COLOR_PALETTE}
+          unavailableAvatarIds={unavailableAvatarIds}
+          unavailableColors={unavailableColors}
           showColorPicker={showColorPicker}
+          saving={saving}
           onConfirm={onConfirm}
           title={title}
           label={label}
@@ -668,6 +688,7 @@ function App() {
   const [networkRole, setNetworkRole] = useState(null);
   const [localPlayer, setLocalPlayer] = useState(1);
   const [roomPlayers, setRoomPlayers] = useState([]);
+  const [roomEditingPlayers, setRoomEditingPlayers] = useState([]);
   const [roomPlayerNames, setRoomPlayerNames] = useState({});
   const peerRoomRef = useRef(null);
   const latestSnapshotRef = useRef(null);
@@ -717,6 +738,8 @@ function App() {
   const soundEnabled = soundVolume > 0;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [duelStartPreparing, setDuelStartPreparing] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [hiddenPlayers, setHiddenPlayers] = useState(new Set());
   const [playerColors, setPlayerColors] = useState(PLAYER_COLORS);
@@ -736,12 +759,42 @@ function App() {
     writeStoredPlayerName(cleanName);
   }
 
-  function confirmLocalPlayerProfile(profile) {
+  async function confirmLocalPlayerProfile(profile) {
     const nextProfile = {
       name: cleanPlayerName(profile?.name),
       avatarId: normalizeAvatarId(profile?.avatarId) || DEFAULT_PLAYER_AVATAR_ID,
     };
     if (!nextProfile.name) return;
+    if (screen === "duelWaiting") {
+      setProfileSaving(true);
+      try {
+        const response = await peerRoomRef.current?.updateProfile(
+          nextProfile.name,
+          nextProfile.avatarId,
+          profile?.color
+        );
+        const syncedNames = response?.playerNames ?? {};
+        const syncedAvatars = response?.playerAvatars ?? {};
+        const syncedColors = response?.playerColors ?? {};
+        const syncedAvatar = normalizeAvatarId(syncedAvatars[localPlayer]) || nextProfile.avatarId;
+        setLocalPlayerProfile({ ...nextProfile, avatarId: syncedAvatar });
+        setLocalPlayerNameState(nextProfile.name);
+        setLocalPlayerAvatarId(syncedAvatar);
+        writeStoredPlayerProfile({ ...nextProfile, avatarId: syncedAvatar });
+        setRoomPlayerNames((current) => mergePlayerNames(current, syncedNames));
+        setPlayerAvatars((current) => mergePlayerAvatars(current, syncedAvatars));
+        setPlayerColors((current) => ({ ...current, ...syncedColors }));
+        setRoomEditingPlayers((current) => current.filter((player) => player !== localPlayer));
+        setProfileEditorOpen(false);
+        setNetworkStatus("Phòng Sẵn sàng");
+      } catch (error) {
+        playSound("denied");
+        setNetworkStatus(error.message ?? "Không thể lưu nhân vật.");
+      } finally {
+        setProfileSaving(false);
+      }
+      return;
+    }
     setLocalPlayerProfile(nextProfile);
     setLocalPlayerNameState(nextProfile.name);
     setLocalPlayerAvatarId(nextProfile.avatarId);
@@ -750,32 +803,34 @@ function App() {
       ...current,
       [humanPlayer]: nextProfile.avatarId,
     }));
-    if (screen === "duelWaiting") {
-      const nextPlayerColors = resolvePlayerColorChoice(
-        playerColors,
-        localPlayer,
-        profile?.color,
-        playerIdsForCount(competitivePlayerCount)
-      );
-      setRoomPlayerNames((current) => mergePlayerNames(current, { [localPlayer]: nextProfile.name }));
-      setPlayerAvatars((current) => mergePlayerAvatars(current, { [localPlayer]: nextProfile.avatarId }));
-      setPlayerColors(nextPlayerColors);
-      peerRoomRef.current?.updateProfile(nextProfile.name, nextProfile.avatarId, nextPlayerColors[localPlayer]);
-      if (isDuelHost) {
-        const nextWaitingState = duelWaitingSnapshot({
-          playerNames: mergePlayerNames(roomPlayerNames, { [localPlayer]: nextProfile.name }),
-          playerAvatars: mergePlayerAvatars(playerAvatars, { [localPlayer]: nextProfile.avatarId }),
-          playerColors: nextPlayerColors,
-        });
-        latestSnapshotRef.current = nextWaitingState;
-        peerRoomRef.current?.broadcastState(nextWaitingState);
-      }
-    }
     setProfileEditorOpen(false);
   }
 
-  function openProfileEditor() {
+  async function openProfileEditor() {
+    if (screen === "duelWaiting") {
+      try {
+        await peerRoomRef.current?.setProfileEditing(true);
+        setRoomEditingPlayers((current) => [...new Set([...current, localPlayer])]);
+      } catch (error) {
+        playSound("denied");
+        setNetworkStatus(error.message ?? "Chưa thể chỉnh nhân vật.");
+        return;
+      }
+    }
     setProfileEditorOpen(true);
+  }
+
+  async function closeProfileEditor() {
+    if (profileSaving) return;
+    if (screen === "duelWaiting") {
+      try {
+        await peerRoomRef.current?.setProfileEditing(false);
+      } catch {
+        // Leaving the editor locally is still safe; disconnect cleanup releases the lock.
+      }
+      setRoomEditingPlayers((current) => current.filter((player) => player !== localPlayer));
+    }
+    setProfileEditorOpen(false);
   }
 
   function handleProfileEditKeyDown(event) {
@@ -1800,6 +1855,7 @@ function App() {
               }
               setNetworkStatus("Phòng Sẵn sàng");
             },
+            onEditingPlayers: setRoomEditingPlayers,
             onStatus: setNetworkStatus,
           });
         } catch (error) {
@@ -1807,7 +1863,6 @@ function App() {
         }
       }
       peerRoomRef.current = peerRoom;
-      peerRoom.updateProfile(playerName, playerAvatar);
       peerRoom.broadcastState(waitingState);
       const copiedRoomCode = await copyTextToClipboard(code);
       setPlayMode("duel");
@@ -1887,15 +1942,23 @@ function App() {
           }
           setNetworkStatus("Phòng Sẵn sàng");
         },
+        onEditingPlayers: setRoomEditingPlayers,
         onStatus: setNetworkStatus,
       });
       peerRoomRef.current = peerRoom;
-      peerRoom.updateProfile(playerName, playerAvatar);
+      const assignedAvatar = normalizeAvatarId(peerRoom.playerAvatar) || playerAvatar;
+      const assignedColor = PLAYER_COLOR_PALETTE.includes(peerRoom.playerColor)
+        ? peerRoom.playerColor
+        : playerColors[peerRoom.playerId ?? 1] ?? PLAYER_COLOR_PALETTE[0];
       setPlayMode("duel");
       setNetworkRole("guest");
       setLocalPlayer(peerRoom.playerId ?? 1);
+      setLocalPlayerAvatarId(assignedAvatar);
+      setLocalPlayerProfile((current) => ({ ...current, avatarId: assignedAvatar }));
+      writeStoredPlayerProfile({ name: playerName, avatarId: assignedAvatar });
       setRoomPlayerNames((prev) => mergePlayerNames(prev, { [peerRoom.playerId ?? 1]: playerName }));
-      setPlayerAvatars((prev) => mergePlayerAvatars(prev, { [peerRoom.playerId ?? 1]: playerAvatar }));
+      setPlayerAvatars((prev) => mergePlayerAvatars(prev, { [peerRoom.playerId ?? 1]: assignedAvatar }));
+      setPlayerColors((prev) => ({ ...prev, [peerRoom.playerId ?? 1]: assignedColor }));
       setRoomCode(code);
       setScreen("duelWaiting");
       setNetworkStatus("Phòng Sẵn sàng");
@@ -1908,7 +1971,7 @@ function App() {
     }
   }
 
-  function startDuelGame() {
+  async function startDuelGame() {
     if (!isDuelHost) {
       playSound("denied");
       return;
@@ -1918,11 +1981,36 @@ function App() {
       setNetworkStatus(`Đang chờ đủ ${competitivePlayerCount} người chơi.`);
       return;
     }
-    const missingName = playerIdsForCount(competitivePlayerCount).find((player) => !roomPlayerNames[player]?.trim());
+    if (roomEditingPlayers.length) {
+      playSound("denied");
+      setNetworkStatus("Đang chờ người chơi lưu nhân vật.");
+      return;
+    }
+    setDuelStartPreparing(true);
+    let preparedRoom;
+    try {
+      preparedRoom = await peerRoomRef.current?.prepareStart();
+    } catch (error) {
+      playSound("denied");
+      setNetworkStatus(error.message ?? "Chưa thể bắt đầu phòng.");
+      setDuelStartPreparing(false);
+      return;
+    }
+    const preparedPlayers = preparedRoom?.players ?? roomPlayers;
+    const preparedNames = preparedRoom?.playerNames ?? roomPlayerNames;
+    const preparedAvatars = preparedRoom?.playerAvatars ?? playerAvatars;
+    const preparedColors = preparedRoom?.playerColors ?? playerColors;
+    if (preparedPlayers.length < competitivePlayerCount) {
+      playSound("denied");
+      setNetworkStatus(`Đang chờ đủ ${competitivePlayerCount} người chơi.`);
+      setDuelStartPreparing(false);
+      return;
+    }
+    const missingName = playerIdsForCount(competitivePlayerCount).find((player) => !preparedNames[player]?.trim());
     if (missingName) {
       playSound("denied");
       setNetworkStatus("Đang đồng bộ tên người chơi...");
-      peerRoomRef.current?.updateProfile(localPlayerName.trim(), localPlayerAvatarId);
+      setDuelStartPreparing(false);
       return;
     }
     playSound("start");
@@ -1930,11 +2018,20 @@ function App() {
     const nextScenario = scenarioData?.scenarios?.[nextIndex] ?? null;
     const seed = Math.floor(Math.random() * 0xffffffff);
     const playerCountForGame = Math.max(competitivePlayerCount, 3);
-    const nextTurnOrder = shuffledItems(playerIdsForCount(playerCountForGame), Math.floor(Math.random() * 0xffffffff));
-    const nextPlayerNames = mergePlayerNames(roomPlayerNames, localPlayerName.trim() ? { [localPlayer]: localPlayerName.trim() } : {});
+    const gamePlayerIds = playerIdsForCount(playerCountForGame);
+    const humanPlayerIds = playerIdsForCount(competitivePlayerCount);
+    const nextTurnOrder = shuffledItems(gamePlayerIds, Math.floor(Math.random() * 0xffffffff));
+    const nextPlayerNames = mergePlayerNames(preparedNames, localPlayerName.trim() ? { [localPlayer]: localPlayerName.trim() } : {});
     const nextPlayerAvatars = randomAvatarsForPlayers(
-      playerIdsForCount(playerCountForGame),
-      mergePlayerAvatars(playerAvatars, { [localPlayer]: localPlayerAvatarId })
+      gamePlayerIds,
+      valuesForPlayers(
+        mergePlayerAvatars(preparedAvatars, { [localPlayer]: localPlayerAvatarId }),
+        humanPlayerIds
+      )
+    );
+    const nextPlayerColors = randomColorsForPlayers(
+      gamePlayerIds,
+      valuesForPlayers(preparedColors, humanPlayerIds)
     );
     const initialState = {
       phase: "game",
@@ -1944,7 +2041,7 @@ function App() {
       playerCount: playerCountForGame,
       playerNames: nextPlayerNames,
       hintDealSeed: seed,
-      playerColors,
+      playerColors: nextPlayerColors,
       playerAvatars: nextPlayerAvatars,
       marks: {},
       message: turnStatus(nextTurnOrder[0]),
@@ -1961,11 +2058,13 @@ function App() {
     };
     latestSnapshotRef.current = initialState;
     setRoomPlayerNames(nextPlayerNames);
+    setPlayerColors(nextPlayerColors);
     setPlayerAvatars(nextPlayerAvatars);
     applyGameSnapshot(initialState);
     setActiveOverlays([localPlayer]);
     setScreen("game");
     peerRoomRef.current?.broadcastState(initialState);
+    setDuelStartPreparing(false);
   }
 
   function startSolo() {
@@ -1980,6 +2079,7 @@ function App() {
     setDuelScenario(null);
     setRoomCode("");
     setRoomPlayers([]);
+    setRoomEditingPlayers([]);
     setRoomPlayerNames({});
     setPlayerAvatars(randomAvatarsForPlayers([1, 2, 3], { 1: localPlayerAvatarId }));
     setPendingGameOver(null);
@@ -2000,6 +2100,7 @@ function App() {
     setDuelScenario(null);
     setRoomCode("");
     setRoomPlayers([]);
+    setRoomEditingPlayers([]);
     setRoomPlayerNames({});
     setPendingGameOver(null);
     setGameOverOverlay(null);
@@ -2013,12 +2114,18 @@ function App() {
     const nextScenario = overrides.scenario ?? (playMode === "duel" ? scenarioData?.scenarios?.[nextIndex] ?? null : null);
     const playerIds = playMode === "duel" ? playerIdsForCount(Math.max(competitivePlayerCount, 3)) : [1, 2, 3];
     const nextTurnOrder = shuffledItems(playerIds, Math.floor(Math.random() * 0xffffffff));
-    const nextPlayerAvatars = overrides.playerAvatars ?? randomAvatarsForPlayers(playerIds, { [humanPlayer]: localPlayerAvatarId });
+    const nextPlayerAvatars = overrides.playerAvatars ?? (
+      playMode === "duel"
+        ? playerAvatars
+        : randomAvatarsForPlayers(playerIds, { [humanPlayer]: localPlayerAvatarId })
+    );
+    const nextPlayerColors = overrides.playerColors ?? playerColors;
     const nextCurrentTurn = nextTurnOrder[0];
     const nextMessage = overrides.message ?? turnStatus(nextCurrentTurn);
     setScenarioIndex(nextIndex);
     setDuelScenario(nextScenario);
     setHintDealSeed(nextSeed);
+    setPlayerColors(nextPlayerColors);
     setPlayerAvatars(nextPlayerAvatars);
     setTurnOrder(nextTurnOrder);
     setSelectedCell(null);
@@ -2049,6 +2156,7 @@ function App() {
         scenario: nextScenario,
         playerCount,
         playerNames: roomPlayerNames,
+        playerColors: nextPlayerColors,
         playerAvatars: nextPlayerAvatars,
         hintDealSeed: nextSeed,
         marks: {},
@@ -2915,14 +3023,29 @@ function App() {
       </div>
     </aside>
   ) : null;
+  const unavailableLobbyAvatarIds = screen === "duelWaiting"
+    ? Object.entries(playerAvatars)
+      .filter(([player]) => Number(player) !== localPlayer && roomPlayers.includes(Number(player)))
+      .map(([, avatarId]) => normalizeAvatarId(avatarId))
+      .filter(Boolean)
+    : [];
+  const unavailableLobbyColors = screen === "duelWaiting"
+    ? Object.entries(playerColors)
+      .filter(([player]) => Number(player) !== localPlayer && roomPlayers.includes(Number(player)))
+      .map(([, color]) => color)
+      .filter(Boolean)
+    : [];
   const profileEditorOverlay = profileEditorOpen ? (
     <ProfileEditorOverlay
       initialName={localPlayerName}
       initialAvatarId={localPlayerAvatarId}
       initialColor={playerColors[localPlayer] ?? PLAYER_COLOR_PALETTE[0]}
+      unavailableAvatarIds={unavailableLobbyAvatarIds}
+      unavailableColors={unavailableLobbyColors}
       showColorPicker={screen === "duelWaiting"}
+      saving={profileSaving}
       onConfirm={confirmLocalPlayerProfile}
-      onClose={() => setProfileEditorOpen(false)}
+      onClose={closeProfileEditor}
       title={screen === "duelWaiting" ? "Chỉnh sửa nhân vật" : "Sửa nhân vật"}
       label={screen === "duelWaiting" ? "" : "Người chơi"}
       submitLabel="Lưu"
@@ -3001,7 +3124,11 @@ function App() {
     const waitingSlots = playerIdsForCount(competitivePlayerCount)
       .sort((a, b) => (a === 1 ? -1 : b === 1 ? 1 : a - b));
     const allWaitingNamesReady = waitingSlots.every((player) => Boolean(roomPlayerNames[player]?.trim()));
-    const readyToStart = isDuelHost && roomPlayers.length >= competitivePlayerCount && allWaitingNamesReady;
+    const readyToStart = isDuelHost
+      && roomPlayers.length >= competitivePlayerCount
+      && allWaitingNamesReady
+      && roomEditingPlayers.length === 0
+      && !duelStartPreparing;
     return (
       <PhoneShell onClickCapture={handleGlobalButtonSound}>
         {settingsOverlay}
@@ -3092,7 +3219,7 @@ function App() {
                   disabled={!readyToStart}
                   onClick={startDuelGame}
                 >
-                  Bắt đầu
+                  {duelStartPreparing ? "Đang đồng bộ..." : "Bắt đầu"}
                 </button>
               ) : (
                 <p className="duelWaitingNote">Đợi host bắt đầu ván.</p>

@@ -1,6 +1,6 @@
-import { generateRandomMap, pickMonsterCell } from "../src/mapGenerator";
-import { randomCombination, shuffle } from "../src/random";
-import { buildHintPool } from "../src/hints";
+import { generateRandomMap, pickMonsterCell } from "../src/mapGenerator.js";
+import { randomCombination, shuffle } from "../src/random.js";
+import { buildHintPool } from "../src/hints.js";
 
 export function getPossibleCells(map, hints) {
   return map.cells.filter((cell) => hints.every((hint) => hint.check(cell, map)));
@@ -76,6 +76,16 @@ function scorePuzzleCandidate(map, hints) {
   };
 }
 
+function terrainCount(map, terrain) {
+  return map.cells.filter((cell) => cell.terrain === terrain).length;
+}
+
+function isObviousMonsterPlacement(map, monsterCell) {
+  // Reject cases where the monster sits on the only cell of its terrain.
+  // Those can feel solved by board inspection rather than deduction.
+  return terrainCount(map, monsterCell.terrain) <= 1;
+}
+
 export function generatePuzzle({
   rng,
   playerCount = 3,
@@ -84,6 +94,7 @@ export function generatePuzzle({
   mapData = null,
   mapView = null,
   minDifficultyScore = 80,
+  rejectObvious = true,
 } = {}) {
   if (!rng) throw new Error("generatePuzzle requires rng");
   const hintPool = buildHintPool().filter((hint) => hint.positive !== false);
@@ -94,6 +105,7 @@ export function generatePuzzle({
       viewPieceRows: mapView?.pieceRows,
     });
     const monsterCell = pickMonsterCell(rng, map);
+    if (rejectObvious && isObviousMonsterPlacement(map, monsterCell)) continue;
 
     const validHints = shuffle(
       rng,

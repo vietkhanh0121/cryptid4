@@ -70,6 +70,7 @@ export async function createPeerRoom({
   onState,
   onAction,
   onRoom,
+  onEditingPlayers,
   onStatus,
 }) {
   const code = roomCodeFromPeerId(role === "host" ? peerId : hostPeerId);
@@ -82,6 +83,9 @@ export async function createPeerRoom({
   });
 
   let localPlayerId = playerId;
+  let localPlayerName = playerName;
+  let localPlayerAvatar = playerAvatar;
+  let localPlayerColor = playerColor;
   let registered = false;
   let hostToken = null;
 
@@ -93,9 +97,23 @@ export async function createPeerRoom({
     onStatus?.("Đã kết nối server online.");
     if (!code || !registered) return;
     if (role === "host") {
-      socket.emit("room:resumeHost", { code, playerId: localPlayerId, playerName, playerAvatar, playerColor, state: getState?.(), hostToken });
+      socket.emit("room:resumeHost", {
+        code,
+        playerId: localPlayerId,
+        playerName: localPlayerName,
+        playerAvatar: localPlayerAvatar,
+        playerColor: localPlayerColor,
+        state: getState?.(),
+        hostToken,
+      });
     } else if (localPlayerId) {
-      socket.emit("room:resumeGuest", { code, playerId: localPlayerId, playerName, playerAvatar, playerColor });
+      socket.emit("room:resumeGuest", {
+        code,
+        playerId: localPlayerId,
+        playerName: localPlayerName,
+        playerAvatar: localPlayerAvatar,
+        playerColor: localPlayerColor,
+      });
     }
   });
 
@@ -108,8 +126,9 @@ export async function createPeerRoom({
     onAction?.(kind, payload, Number(fromPlayer));
   });
 
-  socket.on("room:players", ({ players, playerNames, playerAvatars, playerColors }) => {
+  socket.on("room:players", ({ players, playerNames, playerAvatars, playerColors, editingPlayers }) => {
     onRoom?.(players ?? [], playerNames ?? {}, playerAvatars ?? {}, playerColors ?? {});
+    onEditingPlayers?.(editingPlayers ?? []);
   });
 
   socket.on("room:error", ({ message }) => {
@@ -130,6 +149,8 @@ export async function createPeerRoom({
         state: getState?.(),
       });
       localPlayerId = Number(response.playerId);
+      localPlayerAvatar = response.playerAvatars?.[localPlayerId] ?? localPlayerAvatar;
+      localPlayerColor = response.playerColors?.[localPlayerId] ?? localPlayerColor;
       hostToken = response.hostToken ?? null;
       registered = true;
       onRoom?.(response.players ?? [localPlayerId], response.playerNames ?? {}, response.playerAvatars ?? {}, response.playerColors ?? {});
@@ -143,6 +164,8 @@ export async function createPeerRoom({
         playerColor,
       });
       localPlayerId = Number(response.playerId);
+      localPlayerAvatar = response.playerAvatars?.[localPlayerId] ?? localPlayerAvatar;
+      localPlayerColor = response.playerColors?.[localPlayerId] ?? localPlayerColor;
       registered = true;
       onRoom?.(response.players ?? [], response.playerNames ?? {}, response.playerAvatars ?? {}, response.playerColors ?? {});
       onState?.(response.state, localPlayerId);
@@ -156,6 +179,8 @@ export async function createPeerRoom({
   return {
     peerId: socket.id,
     playerId: localPlayerId,
+    playerAvatar: localPlayerAvatar,
+    playerColor: localPlayerColor,
     sendAction(kind, payload) {
       if (role === "host") return;
       socket.emit("room:action", { code, kind, payload });
@@ -164,11 +189,38 @@ export async function createPeerRoom({
       if (role !== "host") return;
       socket.emit("room:state", { code, state, playerId: localPlayerId });
     },
-    updateProfile(name, avatar = playerAvatar, color = null) {
-      socket.emit("room:updateProfile", { code, playerId: localPlayerId, playerName: name, playerAvatar: avatar, playerColor: color });
+    async updateProfile(name, avatar = localPlayerAvatar, color = localPlayerColor) {
+      const response = await emitAck(socket, "room:updateProfile", {
+        code,
+        playerId: localPlayerId,
+        playerName: name,
+        playerAvatar: avatar,
+        playerColor: color,
+      });
+      localPlayerName = name;
+      localPlayerAvatar = response.playerAvatars?.[localPlayerId] ?? avatar;
+      localPlayerColor = response.playerColors?.[localPlayerId] ?? color;
+      return response;
+    },
+    setProfileEditing(editing) {
+      return emitAck(socket, "room:profileEditing", {
+        code,
+        playerId: localPlayerId,
+        editing: Boolean(editing),
+      });
+    },
+    prepareStart() {
+      if (role !== "host") return Promise.reject(new Error("Chỉ host mới có thể bắt đầu."));
+      return emitAck(socket, "room:prepareStart", { code });
     },
     updateName(name) {
-      socket.emit("room:updateProfile", { code, playerId: localPlayerId, playerName: name, playerAvatar });
+      socket.emit("room:updateProfile", {
+        code,
+        playerId: localPlayerId,
+        playerName: name,
+        playerAvatar: localPlayerAvatar,
+        playerColor: localPlayerColor,
+      });
     },
     close() {
       socket.emit("room:leave", { code, playerId: localPlayerId });

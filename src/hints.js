@@ -6,8 +6,8 @@ import {
   STRUCTURE_LABELS,
   TERRAIN_LABELS,
   TERRAINS,
-} from "./constants";
-import { withinDistance } from "./hex";
+} from "./constants.js";
+import { withinDistance } from "./hex.js";
 
 function terrainName(t) {
   return TERRAIN_LABELS[t] ?? t;

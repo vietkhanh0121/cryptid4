@@ -942,6 +942,13 @@ summary:focus-visible {
     0 0 12px rgba(255, 211, 77, .38);
 }
 
+.profileAvatarChoice:disabled,
+.profileColorChoice:disabled {
+  cursor: not-allowed;
+  opacity: .28;
+  filter: grayscale(1);
+}
+
 .profileAvatarChoice img {
   width: 112%;
   height: 112%;

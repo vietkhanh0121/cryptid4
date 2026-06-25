@@ -5,7 +5,8 @@
     "server": "node server-only.mjs",
     "vite": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "generate:scenarios": "node tools/generateScenarios.js"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",

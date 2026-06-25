@@ -10,8 +10,8 @@ import {
   STRUCTURE_TYPES,
   TERRAIN_CODES,
   TERRAINS,
-} from "./constants";
-import { choice, randInt, shuffle } from "./random";
+} from "./constants.js";
+import { choice, randInt, shuffle } from "./random.js";
 
 function maybe(rng, probability) {
   return rng() < probability;
