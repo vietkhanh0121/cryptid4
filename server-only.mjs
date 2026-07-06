@@ -7,6 +7,7 @@ const PORT = Number(process.env.PORT ?? 5173);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const rooms = new Map();
 const PLAYER_COLOR_PALETTE = ["#ff4d5e", "#f4d03f", "#00b4d8", "#57cc99", "#c77dff"];
+const PLAYER_AVATAR_IDS = Array.from({ length: 16 }, (_, index) => String(index + 1));
 
 const app = express();
 const server = http.createServer(app);
@@ -62,6 +63,7 @@ function emitPlayers(room) {
     playerNames: sortedPlayerNames(room),
     playerAvatars: sortedPlayerAvatars(room),
     playerColors: sortedPlayerColors(room),
+    editingPlayers: [...room.editingPlayers].sort((a, b) => a - b),
     maxPlayers: room.maxPlayers,
   });
 }
@@ -93,6 +95,7 @@ function makeRoom(code, maxPlayers, state) {
     playerNames: new Map(),
     playerAvatars: new Map(),
     playerColors: new Map(),
+    editingPlayers: new Set(),
     state,
     updatedAt: Date.now(),
   };
@@ -102,25 +105,33 @@ function roomHasConnections(room) {
   return Boolean(room?.hostSocketId || room?.socketsByPlayer?.size);
 }
 
-function applyPlayerColorChoice(room, playerId, requestedColor) {
+function assignUniqueChoice(values, choices, playerId, requestedValue, allowFallback = true) {
+  const currentValue = values.get(playerId);
+  const usedByOthers = new Set(
+    [...values.entries()]
+      .filter(([player]) => player !== playerId)
+      .map(([, value]) => value)
+      .filter(Boolean)
+  );
+  const safeRequestedValue = choices.includes(requestedValue) ? requestedValue : "";
+  const nextValue = safeRequestedValue && !usedByOthers.has(safeRequestedValue)
+    ? safeRequestedValue
+    : allowFallback
+      ? choices.find((choice) => !usedByOthers.has(choice))
+      : "";
+  if (!nextValue) return { ok: false, value: currentValue ?? "" };
+  values.set(playerId, nextValue);
+  return { ok: true, value: nextValue };
+}
+
+function applyPlayerColorChoice(room, playerId, requestedColor, allowFallback = true) {
   const safeColor = String(requestedColor ?? "").trim();
-  if (!PLAYER_COLOR_PALETTE.includes(safeColor)) return;
-  const players = sortedPlayers(room);
-  const currentColors = {
-    ...((room.state ?? {}).playerColors ?? {}),
-    ...Object.fromEntries(room.playerColors.entries()),
-  };
-  const displacedPlayer = players.find((player) => player !== playerId && currentColors[player] === safeColor);
-  currentColors[playerId] = safeColor;
-  room.playerColors.set(playerId, safeColor);
-  if (displacedPlayer) {
-    const usedColors = new Set(players
-      .filter((player) => player !== displacedPlayer)
-      .map((player) => currentColors[player])
-      .filter(Boolean));
-    const nextColor = PLAYER_COLOR_PALETTE.find((color) => !usedColors.has(color));
-    if (nextColor) room.playerColors.set(displacedPlayer, nextColor);
-  }
+  return assignUniqueChoice(room.playerColors, PLAYER_COLOR_PALETTE, playerId, safeColor, allowFallback);
+}
+
+function applyPlayerAvatarChoice(room, playerId, requestedAvatar, allowFallback = true) {
+  const safeAvatar = String(requestedAvatar ?? "").trim();
+  return assignUniqueChoice(room.playerAvatars, PLAYER_AVATAR_IDS, playerId, safeAvatar, allowFallback);
 }
 
 io.on("connection", (socket) => {
@@ -143,7 +154,7 @@ io.on("connection", (socket) => {
     room.players.add(safePlayerId);
     room.socketsByPlayer.set(safePlayerId, socket.id);
     room.playerNames.set(safePlayerId, String(playerName).trim().slice(0, 18));
-    room.playerAvatars.set(safePlayerId, String(playerAvatar).trim().slice(0, 24));
+    applyPlayerAvatarChoice(room, safePlayerId, playerAvatar);
     applyPlayerColorChoice(room, safePlayerId, playerColor);
     rooms.set(safeCode, room);
     socket.join(roomSocketRoom(safeCode));
@@ -176,7 +187,7 @@ io.on("connection", (socket) => {
     room.players.add(assignedPlayerId);
     room.socketsByPlayer.set(assignedPlayerId, socket.id);
     room.playerNames.set(assignedPlayerId, String(playerName).trim().slice(0, 18));
-    room.playerAvatars.set(assignedPlayerId, String(playerAvatar).trim().slice(0, 24));
+    applyPlayerAvatarChoice(room, assignedPlayerId, playerAvatar);
     applyPlayerColorChoice(room, assignedPlayerId, playerColor);
     room.updatedAt = Date.now();
     socket.join(roomSocketRoom(safeCode));
@@ -196,7 +207,7 @@ io.on("connection", (socket) => {
     room.players.add(Number(playerId));
     room.socketsByPlayer.set(Number(playerId), socket.id);
     if (playerName) room.playerNames.set(Number(playerId), String(playerName).trim().slice(0, 18));
-    if (playerAvatar) room.playerAvatars.set(Number(playerId), String(playerAvatar).trim().slice(0, 24));
+    if (playerAvatar) applyPlayerAvatarChoice(room, Number(playerId), playerAvatar);
     applyPlayerColorChoice(room, Number(playerId), playerColor);
     if (state) room.state = stateWithPlayerProfiles(room, state);
     room.updatedAt = Date.now();
@@ -213,7 +224,7 @@ io.on("connection", (socket) => {
     if (!room || !safePlayerId || safePlayerId === 1 || !room.players.has(safePlayerId)) return;
     room.socketsByPlayer.set(safePlayerId, socket.id);
     if (playerName) room.playerNames.set(safePlayerId, String(playerName).trim().slice(0, 18));
-    if (playerAvatar) room.playerAvatars.set(safePlayerId, String(playerAvatar).trim().slice(0, 24));
+    if (playerAvatar) applyPlayerAvatarChoice(room, safePlayerId, playerAvatar);
     applyPlayerColorChoice(room, safePlayerId, playerColor);
     room.updatedAt = Date.now();
     socket.join(roomSocketRoom(room.code));
@@ -237,24 +248,79 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("room:updateProfile", ({ code, playerId, playerName = "", playerAvatar = "", playerColor = "" } = {}) => {
+  socket.on("room:profileEditing", ({ code, playerId, editing } = {}, ack) => {
+    const room = rooms.get(String(code ?? ""));
+    const safePlayerId = Number(playerId);
+    if (!room || !safePlayerId || room.socketsByPlayer.get(safePlayerId) !== socket.id) {
+      ack?.({ ok: false, message: "Không thể khóa hồ sơ để chỉnh sửa." });
+      return;
+    }
+    if (editing) room.editingPlayers.add(safePlayerId);
+    else room.editingPlayers.delete(safePlayerId);
+    emitPlayers(room);
+    ack?.({ ok: true });
+  });
+
+  socket.on("room:updateProfile", ({ code, playerId, playerName = "", playerAvatar = "", playerColor = "" } = {}, ack) => {
     const room = rooms.get(String(code ?? ""));
     const safePlayerId = Number(playerId);
     const safeName = String(playerName).trim().slice(0, 18);
     const safeAvatar = String(playerAvatar).trim().slice(0, 24);
     const safeColor = String(playerColor).trim();
-    if (!room || !safePlayerId || !safeName) return;
-    if (room.socketsByPlayer.get(safePlayerId) !== socket.id) return;
-    if (room.playerNames.get(safePlayerId) === safeName && room.playerAvatars.get(safePlayerId) === safeAvatar && (!safeColor || room.playerColors.get(safePlayerId) === safeColor)) return;
+    if (!room || !safePlayerId || !safeName || room.socketsByPlayer.get(safePlayerId) !== socket.id) {
+      ack?.({ ok: false, message: "Không thể cập nhật nhân vật." });
+      return;
+    }
+    const previousAvatar = room.playerAvatars.get(safePlayerId) ?? "";
+    const avatarResult = safeAvatar
+      ? applyPlayerAvatarChoice(room, safePlayerId, safeAvatar, false)
+      : { ok: Boolean(previousAvatar), value: previousAvatar };
+    if (!avatarResult.ok) {
+      ack?.({ ok: false, message: "Avatar này đã được người chơi khác chọn." });
+      return;
+    }
+    const previousColor = room.playerColors.get(safePlayerId) ?? "";
+    const colorResult = safeColor
+      ? applyPlayerColorChoice(room, safePlayerId, safeColor, false)
+      : { ok: Boolean(previousColor), value: previousColor };
+    if (!colorResult.ok) {
+      if (previousAvatar) room.playerAvatars.set(safePlayerId, previousAvatar);
+      ack?.({ ok: false, message: "Màu này đã được người chơi khác chọn." });
+      return;
+    }
     room.playerNames.set(safePlayerId, safeName);
-    if (safeAvatar) room.playerAvatars.set(safePlayerId, safeAvatar);
-    applyPlayerColorChoice(room, safePlayerId, safeColor);
+    room.editingPlayers.delete(safePlayerId);
     room.state = stateWithPlayerProfiles(room);
     room.updatedAt = Date.now();
     emitPlayers(room);
     io.to(roomSocketRoom(room.code)).emit("room:state", {
       state: room.state,
       playerId: safePlayerId,
+    });
+    ack?.({
+      ok: true,
+      playerNames: sortedPlayerNames(room),
+      playerAvatars: sortedPlayerAvatars(room),
+      playerColors: sortedPlayerColors(room),
+    });
+  });
+
+  socket.on("room:prepareStart", ({ code } = {}, ack) => {
+    const room = rooms.get(String(code ?? ""));
+    if (!room || room.hostSocketId !== socket.id) {
+      ack?.({ ok: false, message: "Chỉ host mới có thể bắt đầu." });
+      return;
+    }
+    if (room.editingPlayers.size) {
+      ack?.({ ok: false, message: "Có người chơi đang chỉnh nhân vật." });
+      return;
+    }
+    ack?.({
+      ok: true,
+      players: sortedPlayers(room),
+      playerNames: sortedPlayerNames(room),
+      playerAvatars: sortedPlayerAvatars(room),
+      playerColors: sortedPlayerColors(room),
     });
   });
 
@@ -273,6 +339,7 @@ io.on("connection", (socket) => {
     if (room.socketsByPlayer.get(safePlayerId) === socket.id) {
       room.socketsByPlayer.delete(safePlayerId);
     }
+    room.editingPlayers.delete(safePlayerId);
     if (room.hostSocketId === socket.id) {
       room.hostSocketId = null;
     }
@@ -288,6 +355,7 @@ io.on("connection", (socket) => {
     if (room.socketsByPlayer.get(playerId) === socket.id) {
       room.socketsByPlayer.delete(playerId);
     }
+    room.editingPlayers.delete(playerId);
     if (room.hostSocketId === socket.id) {
       room.hostSocketId = null;
     }
